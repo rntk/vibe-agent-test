@@ -12,7 +12,7 @@ from pathlib import Path
 from cagent.config import load_fast_api_config, load_smart_api_config
 from cagent.llm import LLMClient, LLMMessage, LLMRequest, LLMResponse, ToolCall
 from cagent.llm.llamacpp import LLamaCPP
-from cagent.tools import BUILTIN_TOOLS, IMPLEMENTATION_TOOLS, PLAN_TOOLS, run_tool_call
+from cagent.tools import IMPLEMENTATION_TOOLS, PLAN_TOOLS, run_tool_call
 from cagent.tracing import Trace, reset_trace, set_trace, write_trace_html
 
 
@@ -115,9 +115,11 @@ def run_implementation_mode(file_path: str) -> None:
     task_content = Path(file_path).read_text(encoding="utf-8")
 
     system_prompt = (
-        "You are an expert software engineering agent. "
-        "You have been given a plan to implement. "
-        "Use the available tools to complete the task step by step. "
+        "You are a software engineering assistant. "
+        "Use the available tools to research the current project. "
+        "If the users task already implemented in the codebase, find the relevant code, explain it to the user and finish. "
+        "Otherwise, research how to implement the users request using the available tools and information in the codebase. "
+        "Current directory: /app"
     )
 
     messages: list[LLMMessage] = []
@@ -134,72 +136,6 @@ def run_implementation_mode(file_path: str) -> None:
             user_prompt,
             system_prompt=system_prompt,
             tools=IMPLEMENTATION_TOOLS,
-            messages=messages,
-        )
-
-        if response.tool_calls:
-            tool_calls = _tool_calls_with_ids(response.tool_calls, iteration)
-            messages.append(
-                LLMMessage(
-                    role="assistant",
-                    content=response.content,
-                    tool_calls=tool_calls,
-                )
-            )
-            for tool_call in tool_calls:
-                try:
-                    result = run_tool_call(tool_call)
-                except Exception as exc:
-                    result = f"Error: {exc}"
-                messages.append(
-                    LLMMessage(
-                        role="tool",
-                        content=result,
-                        tool_call_id=tool_call.id or "",
-                    )
-                )
-        else:
-            print(response.content or "")
-            return
-
-    print(
-        "Error: Maximum iterations reached without final result.",
-        file=sys.stderr,
-    )
-    sys.exit(1)
-
-
-def run_execution_mode(plan_path: str) -> None:
-    """Execute a plan using SMART_API (or FAST_API) with tool support."""
-    smart_client = create_smart_api_client()
-    fast_client = create_fast_api_client()
-    llm = smart_client or fast_client
-    if llm is None:
-        print(
-            "Error: Neither SMART_API_HOST nor FAST_API_HOST is configured.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    plan_content = Path(plan_path).read_text(encoding="utf-8")
-
-    system_prompt = (
-        "You are an expert software engineering agent. "
-        "You have been given a plan to implement. "
-        "Use the available tools to complete the task step by step. "
-    )
-
-    messages: list[LLMMessage] = []
-    initial_user_message = LLMMessage(role="user", content=plan_content)
-    messages.append(initial_user_message)
-    max_iterations = 20
-
-    for iteration in range(max_iterations):
-        user_prompt = ""
-        response = llm.complete(
-            user_prompt,
-            system_prompt=system_prompt,
-            tools=BUILTIN_TOOLS,
             messages=messages,
         )
 
@@ -265,12 +201,6 @@ def main() -> None:
         help="Path to a task file for plan mode",
     )
     parser.add_argument(
-        "-e",
-        "--execute",
-        metavar="FILE",
-        help="Path to a plan file for execution mode with tools",
-    )
-    parser.add_argument(
         "-i",
         "--implementation",
         metavar="FILE",
@@ -288,9 +218,8 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO)
     logging.info(
-        "Start params: plan=%s, execute=%s, implementation=%s, trace=%s",
+        "Start params: plan=%s, implementation=%s, trace=%s",
         args.plan,
-        args.execute,
         args.implementation,
         args.trace,
     )
@@ -305,7 +234,6 @@ def main() -> None:
                 "cagent.main",
                 {
                     "plan": args.plan,
-                    "execute": args.execute,
                     "implementation": args.implementation,
                     "trace_file": trace_file,
                     "trace_html_file": trace_html_file,
@@ -327,10 +255,6 @@ def _run_args(args: argparse.Namespace) -> None:
 
     if args.plan:
         run_plan_mode(args.plan)
-        return
-
-    if args.execute:
-        run_execution_mode(args.execute)
         return
 
     if args.implementation:
@@ -368,7 +292,6 @@ __all__ = [
     "create_fast_api_client",
     "create_smart_api_client",
     "main",
-    "run_execution_mode",
     "run_implementation_mode",
     "run_plan_mode",
     "_run_args",

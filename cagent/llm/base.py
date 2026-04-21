@@ -205,8 +205,11 @@ class LLMClient(ABC):
 
         if not messages and system_prompt is None:
             system_prompt = (
-                "You are a programmer assistant. "
-                "Use the available tools to research the current project."
+                "You are a software engineering assistant. "
+                "Use the available tools to research the current project. "
+                "If the users task already implemented in the codebase, find the relevant code, explain it to the user and finish. "
+                "Otherwise, research how to implement the users request using the available tools and information in the codebase. "
+                "Current directory: /app"
             )
 
         request = LLMRequest(
