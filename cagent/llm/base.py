@@ -79,6 +79,33 @@ BASH_TOOL = ToolDefinition(
     },
 )
 
+WRITE_FILE_TOOL = ToolDefinition(
+    name="write_file",
+    description=(
+        "Write or append content to a text file. Creates parent directories "
+        "if they do not exist."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Path to the text file to write.",
+            },
+            "content": {
+                "type": "string",
+                "description": "Content to write to the file.",
+            },
+            "append": {
+                "type": "boolean",
+                "description": "If true, append content instead of overwriting.",
+            },
+        },
+        "required": ["path", "content"],
+        "additionalProperties": False,
+    },
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ToolCall:
@@ -149,6 +176,12 @@ class LLMClient(ABC):
     ) -> LLMResponse:
         """Run one provider-neutral LLM turn."""
 
+        if not messages and system_prompt is None:
+            system_prompt = (
+                "You are a programmer assistant. "
+                "Use the available tools to research the current project."
+            )
+
         request = LLMRequest(
             user_prompt=user_prompt,
             system_prompt=system_prompt,
@@ -157,11 +190,13 @@ class LLMClient(ABC):
             temperature=temperature,
             messages=messages,
         )
+        all_msgs = request.all_messages()
         with get_trace().span(
             "llm.complete",
             {
                 "request": request,
-                "message_count": len(request.all_messages()),
+                "all_messages": all_msgs,
+                "message_count": len(all_msgs),
                 "tool_names": [tool.name for tool in tools],
             },
         ) as span:

@@ -50,7 +50,7 @@ def run_plan_mode(file_path: str) -> None:
     plan_template = Path("prompts/plan.md").read_text(encoding="utf-8")
     prompt = plan_template.replace("{task}", task_content)
 
-    response = fast_client.complete(prompt)
+    response = fast_client.complete(prompt, tools=BUILTIN_TOOLS)
 
     plans_dir = Path("plans")
     plans_dir.mkdir(parents=True, exist_ok=True)
@@ -179,7 +179,7 @@ def main() -> None:
         logging.basicConfig(level=logging.INFO)
         trace = Trace()
         token = set_trace(trace)
-        trace_file = args.trace or None
+        trace_file = _trace_file_from_arg(args.trace)
         try:
             with trace.span(
                 "cagent.main",
@@ -219,6 +219,14 @@ def _run_args(args: argparse.Namespace) -> None:
     print(response.content)
 
 
+def _trace_file_from_arg(trace_arg: str | None) -> str | None:
+    """Return the trace output path only when the CLI argument is non-empty."""
+
+    if trace_arg is None or trace_arg == "":
+        return None
+    return trace_arg
+
+
 __all__ = [
     "EchoLLMClient",
     "create_fast_api_client",
@@ -227,6 +235,7 @@ __all__ = [
     "run_execution_mode",
     "run_plan_mode",
     "_run_args",
+    "_trace_file_from_arg",
 ]
 
 

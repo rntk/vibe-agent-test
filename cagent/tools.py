@@ -7,11 +7,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from cagent.llm.base import BASH_TOOL, READ_FILE_TOOL, ToolCall, ToolDefinition
+from cagent.llm.base import BASH_TOOL, READ_FILE_TOOL, WRITE_FILE_TOOL, ToolCall, ToolDefinition
 from cagent.tracing import get_trace
 
-BUILTIN_TOOLS: tuple[ToolDefinition, ...] = (READ_FILE_TOOL, BASH_TOOL)
-__all__ = ["BUILTIN_TOOLS", "bash", "read_file", "run_tool", "run_tool_call"]
+BUILTIN_TOOLS: tuple[ToolDefinition, ...] = (READ_FILE_TOOL, BASH_TOOL, WRITE_FILE_TOOL)
+__all__ = ["BUILTIN_TOOLS", "bash", "read_file", "run_tool", "run_tool_call", "write_file"]
 
 
 def _optional_int(arguments: Mapping[str, Any], key: str) -> int | None:
@@ -56,6 +56,23 @@ def read_file(
     start_index = 0 if start_line is None else start_line - 1
     end_index = end_line if end_line is not None else len(lines)
     return "".join(lines[start_index:end_index])
+
+
+def write_file(
+    path: str,
+    content: str,
+    *,
+    append: bool = False,
+    encoding: str = "utf-8",
+) -> str:
+    """Write content to a text file, creating parent directories if needed."""
+
+    file_path = Path(path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    mode = "a" if append else "w"
+    with file_path.open(mode, encoding=encoding) as f:
+        f.write(content)
+    return f"{'Appended to' if append else 'Wrote to'} {path}"
 
 
 def bash(
@@ -150,6 +167,20 @@ def _run_tool(name: str, arguments: Mapping[str, Any]) -> str:
             cwd=cwd,
             timeout_seconds=_optional_int(arguments, "timeout_seconds"),
         )
+    if name == WRITE_FILE_TOOL.name:
+        path = arguments.get("path")
+        if not isinstance(path, str):
+            msg = "path must be a string."
+            raise TypeError(msg)
+        content = arguments.get("content")
+        if not isinstance(content, str):
+            msg = "content must be a string."
+            raise TypeError(msg)
+        append = arguments.get("append")
+        if append is not None and not isinstance(append, bool):
+            msg = "append must be a boolean."
+            raise TypeError(msg)
+        return write_file(path, content, append=bool(append))
 
     msg = f"Unknown tool: {name}"
     raise ValueError(msg)

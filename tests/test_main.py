@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,6 +9,7 @@ import pytest
 from cagent.llm import LLMClient, LLMRequest, LLMResponse, ToolCall
 from cagent.main import (
     EchoLLMClient,
+    main,
     run_execution_mode,
     run_plan_mode,
 )
@@ -219,6 +221,46 @@ def test_echo_llm_client_returns_user_prompt() -> None:
     client = EchoLLMClient()
     response = client.complete("hello")
     assert response.content == "hello"
+
+
+def test_main_writes_trace_to_non_empty_trace_path(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    trace_file = tmp_path / "trace" / "run.json"
+
+    with (
+        patch("sys.argv", ["cagent", "--trace", str(trace_file)]),
+        patch("cagent.main.create_smart_api_client", return_value=None),
+        patch("cagent.main.create_fast_api_client", return_value=None),
+    ):
+        main()
+
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "Hello, World!"
+
+    data = json.loads(trace_file.read_text(encoding="utf-8"))
+    assert data["span_count"] == 2
+    assert data["spans"][0]["name"] == "cagent.main"
+    assert data["spans"][0]["attributes"]["trace_file"] == str(trace_file)
+
+
+def test_main_does_not_write_trace_for_empty_trace_path(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    with (
+        patch("sys.argv", ["cagent", "--trace", ""]),
+        patch("cagent.main.create_smart_api_client", return_value=None),
+        patch("cagent.main.create_fast_api_client", return_value=None),
+        patch("pathlib.Path.write_text") as write_text,
+    ):
+        main()
+
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "Hello, World!"
+    assert list(tmp_path.iterdir()) == []
+    write_text.assert_not_called()
 
 
 def test_run_plan_mode_saves_plan(
