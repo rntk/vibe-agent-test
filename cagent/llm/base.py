@@ -1,0 +1,172 @@
+"""Provider-neutral LLM interface."""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Any, Literal
+
+from cagent.tracing import get_trace
+
+MessageRole = Literal["system", "user", "assistant", "tool"]
+
+
+@dataclass(frozen=True, slots=True)
+class ToolDefinition:
+    """Provider-neutral function/tool schema."""
+
+    name: str
+    description: str
+    parameters: Mapping[str, Any] = field(default_factory=dict)
+
+
+READ_FILE_TOOL = ToolDefinition(
+    name="read_file",
+    description=(
+        "Read a text file from disk. Optionally pass 1-based inclusive line "
+        "range parameters to read only part of the file."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Path to the text file to read.",
+            },
+            "start_line": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Optional 1-based first line to read.",
+            },
+            "end_line": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Optional 1-based last line to read, inclusive.",
+            },
+        },
+        "required": ["path"],
+        "additionalProperties": False,
+    },
+)
+
+
+BASH_TOOL = ToolDefinition(
+    name="bash",
+    description=(
+        "Run a bash command and return the exit code, standard output, and "
+        "standard error."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "command": {
+                "type": "string",
+                "description": "Bash command to run.",
+            },
+            "cwd": {
+                "type": "string",
+                "description": "Optional working directory for the command.",
+            },
+            "timeout_seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Optional command timeout in seconds.",
+            },
+        },
+        "required": ["command"],
+        "additionalProperties": False,
+    },
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ToolCall:
+    """Provider-neutral tool invocation emitted by an LLM."""
+
+    name: str
+    arguments: Mapping[str, Any]
+    id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LLMMessage:
+    """Provider-neutral chat message."""
+
+    role: MessageRole
+    content: str | None = None
+    tool_calls: Sequence[ToolCall] = field(default_factory=tuple)
+    tool_call_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LLMRequest:
+    """Provider-neutral request for a single model turn."""
+
+    user_prompt: str
+    system_prompt: str | None = None
+    tools: Sequence[ToolDefinition] = field(default_factory=tuple)
+    model: str | None = None
+    temperature: float | None = None
+    messages: Sequence[LLMMessage] = field(default_factory=tuple)
+
+    def all_messages(self) -> tuple[LLMMessage, ...]:
+        """Return request messages with system and user prompts applied."""
+
+        messages: list[LLMMessage] = []
+        if self.system_prompt:
+            messages.append(LLMMessage(role="system", content=self.system_prompt))
+        messages.extend(self.messages)
+        messages.append(LLMMessage(role="user", content=self.user_prompt))
+        return tuple(messages)
+
+
+@dataclass(frozen=True, slots=True)
+class LLMResponse:
+    """Provider-neutral response for a single model turn."""
+
+    content: str | None = None
+    tool_calls: Sequence[ToolCall] = field(default_factory=tuple)
+    raw: Any | None = None
+
+
+class LLMClient(ABC):
+    """Base class for provider-specific LLM clients."""
+
+    @abstractmethod
+    def _complete(self, request: LLMRequest) -> LLMResponse:
+        """Run one provider-specific LLM turn."""
+
+    def complete(
+        self,
+        user_prompt: str,
+        *,
+        system_prompt: str | None = None,
+        tools: Sequence[ToolDefinition] = (),
+        model: str | None = None,
+        temperature: float | None = None,
+        messages: Sequence[LLMMessage] = (),
+    ) -> LLMResponse:
+        """Run one provider-neutral LLM turn."""
+
+        request = LLMRequest(
+            user_prompt=user_prompt,
+            system_prompt=system_prompt,
+            tools=tools,
+            model=model,
+            temperature=temperature,
+            messages=messages,
+        )
+        with get_trace().span(
+            "llm.complete",
+            {
+                "request": request,
+                "message_count": len(request.all_messages()),
+                "tool_names": [tool.name for tool in tools],
+            },
+        ) as span:
+            response = self._complete(request)
+            span.set_attribute("response", response)
+            span.set_attribute("response_content", response.content)
+            span.set_attribute("response_tool_calls", response.tool_calls)
+            return response
