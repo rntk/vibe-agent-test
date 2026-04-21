@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import time
 import traceback
 from collections.abc import Mapping, Sequence
 from http.client import HTTPConnection, HTTPSConnection
@@ -21,6 +22,10 @@ _THINK_TAG_RE = re.compile(
     r"<think\b[^>]*>(.*?)</think>",
     flags=re.DOTALL | re.IGNORECASE,
 )
+
+
+class EmptyResponseError(RuntimeError):
+    """Raised when the LLM returns an empty response."""
 
 
 class LLamaCPP(LLMClient):
@@ -60,6 +65,8 @@ class LLamaCPP(LLMClient):
         self.__stop = stop or ["User:", "\n\n"]
         self.__provider_name = provider_name
         self.__provider_key = provider_key
+        self.__max_retries = max_retries
+        self.__retry_delay = retry_delay
 
     @property
     def provider_name(self) -> str:
@@ -324,7 +331,7 @@ class LLamaCPP(LLMClient):
                     f"  Full response: {json.dumps(resp, indent=2, default=str)}"
                 )
                 logging.error(err_msg)
-                raise RuntimeError(err_msg) from None
+                raise EmptyResponseError(err_msg) from None
             if reasoning:
                 logging.info(f"LLM reasoning: {reasoning}")
             if content:
@@ -359,11 +366,26 @@ class LLamaCPP(LLMClient):
             if request.temperature is not None
             else self.__temperature
         )
-        return self._call_single(
-            messages=request.all_messages(),
-            temperature=temperature,
-            tools=request.tools,
-        )
+        last_error: EmptyResponseError | None = None
+        for attempt in range(self.__max_retries + 1):
+            try:
+                return self._call_single(
+                    messages=request.all_messages(),
+                    temperature=temperature,
+                    tools=request.tools,
+                )
+            except EmptyResponseError as e:
+                last_error = e
+                if attempt < self.__max_retries:
+                    logging.warning(
+                        f"LLM empty response on attempt {attempt + 1}/"
+                        f"{self.__max_retries + 1}, retrying in "
+                        f"{self.__retry_delay}s..."
+                    )
+                    time.sleep(self.__retry_delay)
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("LLM call failed after all retries")
 
     def get_connection(self) -> HTTPConnection | HTTPSConnection:
         if self.__is_https:
