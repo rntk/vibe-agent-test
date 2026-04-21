@@ -19,7 +19,11 @@ from cagent.tracing import get_trace
 
 BUILTIN_TOOLS: tuple[ToolDefinition, ...] = (READ_FILE_TOOL, BASH_TOOL, WRITE_FILE_TOOL)
 PLAN_TOOLS: tuple[ToolDefinition, ...] = (READ_FILE_TOOL, BASH_TOOL)
-IMPLEMENTATION_TOOLS: tuple[ToolDefinition, ...] = (READ_FILE_TOOL, BASH_TOOL, WRITE_FILE_TOOL)
+IMPLEMENTATION_TOOLS: tuple[ToolDefinition, ...] = (
+    READ_FILE_TOOL,
+    BASH_TOOL,
+    WRITE_FILE_TOOL,
+)
 __all__ = [
     "BUILTIN_TOOLS",
     "PLAN_TOOLS",

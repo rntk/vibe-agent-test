@@ -463,15 +463,18 @@ def _response_to_message(response: Any) -> dict[str, Any] | None:
         return None
 
     content = response.get("content")
+    reasoning = response.get("reasoning")
     tool_calls = response.get("tool_calls")
     has_content = content is not None and content != ""
+    has_reasoning = reasoning is not None and reasoning != ""
     has_tool_calls = isinstance(tool_calls, list) and len(tool_calls) > 0
-    if not has_content and not has_tool_calls:
+    if not has_content and not has_reasoning and not has_tool_calls:
         return None
 
     return {
         "role": "assistant",
         "content": content,
+        "reasoning": reasoning,
         "tool_calls": tool_calls or [],
     }
 
@@ -497,12 +500,20 @@ def _render_conversation_event(event: Mapping[str, Any]) -> str:
             f"{_json_pre(tool_calls)}</details>"
         )
 
+    reasoning = event.get("reasoning")
+    reasoning_html = ""
+    if isinstance(reasoning, str) and reasoning:
+        reasoning_html = (
+            "<details open><summary>Reasoning</summary>"
+            f"<pre>{escape(reasoning)}</pre></details>"
+        )
+
     content_html = f"<pre>{escape(content_text)}</pre>" if content_text else ""
     return (
         f'<article class="message {escape(role_class)}">'
         f'<div class="role"><span>{escape(role)}</span>'
         f"<span>{escape(meta)}</span></div>"
-        f"{content_html}{tool_calls_html}</article>"
+        f"{reasoning_html}{content_html}{tool_calls_html}</article>"
     )
 
 
@@ -547,6 +558,9 @@ def _span_attribute_summary(attributes: Any) -> str:
     response_content = attributes.get("response_content")
     if isinstance(response_content, str) and response_content:
         parts.append(response_content[:80])
+    response_reasoning = attributes.get("response_reasoning")
+    if isinstance(response_reasoning, str) and response_reasoning:
+        parts.append(f"reasoning={response_reasoning[:80]}")
     return " | ".join(parts)
 
 

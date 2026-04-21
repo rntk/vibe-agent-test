@@ -73,22 +73,22 @@ class LLamaCPP(LLMClient):
     def model_name(self) -> str:
         return self.__model
 
+    @staticmethod
     def _extract_reasoning_and_content(
-        self,
-        response_payload: dict[str, Any],
+        response_payload: Any,
     ) -> tuple[str | None, str | None]:
-        choices = response_payload.get("choices")
+        choices = LLamaCPP.get_value(response_payload, "choices", ())
         first_choice = choices[0] if isinstance(choices, list) and choices else {}
-        message = first_choice.get("message") if isinstance(first_choice, dict) else {}
-        if not isinstance(message, dict):
+        message = LLamaCPP.get_value(first_choice, "message", {})
+        if not isinstance(message, Mapping):
             message = {}
 
-        raw_content = message.get("content")
+        raw_content = LLamaCPP.get_value(message, "content")
         content = raw_content if isinstance(raw_content, str) else ""
 
         reasoning_parts: list[str] = []
         for key in ("reasoning", "reasoning_content", "thinking"):
-            value = message.get(key)
+            value = LLamaCPP.get_value(message, key)
             if isinstance(value, str):
                 stripped = value.strip()
                 if stripped:
@@ -182,11 +182,16 @@ class LLamaCPP(LLMClient):
         if not isinstance(message, Mapping):
             message = {}
 
-        content = LLamaCPP.get_value(message, "content")
+        reasoning, content = LLamaCPP._extract_reasoning_and_content(response)
         tool_calls = LLamaCPP.from_provider_tool_calls(
             LLamaCPP.get_value(message, "tool_calls")
         )
-        return LLMResponse(content=content, tool_calls=tool_calls, raw=response)
+        return LLMResponse(
+            content=content,
+            reasoning=reasoning,
+            tool_calls=tool_calls,
+            raw=response,
+        )
 
     @staticmethod
     def parse_arguments(arguments: Any) -> Mapping[str, Any]:
@@ -299,14 +304,23 @@ class LLamaCPP(LLMClient):
             tool_calls = self.from_provider_tool_calls(message.get("tool_calls"))
 
             if content is None and not tool_calls:
+                choices_count = len(choices) if isinstance(choices, list) else "N/A"
+                first_choice_keys = (
+                    list(first_choice.keys())
+                    if isinstance(first_choice, dict)
+                    else "N/A"
+                )
+                message_keys = (
+                    list(message.keys()) if isinstance(message, dict) else "N/A"
+                )
                 err_msg = (
                     f"LLM returned empty response\n"
                     f"  Host: {self.__host}\n"
                     f"  Model: {self.__model}\n"
                     f"  Status: {res.status} {res.reason}\n"
-                    f"  Choices count: {len(choices) if isinstance(choices, list) else 'N/A'}\n"
-                    f"  First choice keys: {list(first_choice.keys()) if isinstance(first_choice, dict) else 'N/A'}\n"
-                    f"  Message keys: {list(message.keys()) if isinstance(message, dict) else 'N/A'}\n"
+                    f"  Choices count: {choices_count}\n"
+                    f"  First choice keys: {first_choice_keys}\n"
+                    f"  Message keys: {message_keys}\n"
                     f"  Full response: {json.dumps(resp, indent=2, default=str)}"
                 )
                 logging.error(err_msg)
@@ -318,7 +332,12 @@ class LLamaCPP(LLMClient):
             if tool_calls:
                 logging.info(f"LLM tool calls: {[tc.name for tc in tool_calls]}")
 
-            return LLMResponse(content=content, tool_calls=tool_calls, raw=resp)
+            return LLMResponse(
+                content=content,
+                reasoning=reasoning,
+                tool_calls=tool_calls,
+                raw=resp,
+            )
         except RuntimeError:
             raise
         except Exception as e:

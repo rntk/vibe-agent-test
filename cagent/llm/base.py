@@ -179,6 +179,7 @@ class LLMResponse:
     """Provider-neutral response for a single model turn."""
 
     content: str | None = None
+    reasoning: str | None = None
     tool_calls: Sequence[ToolCall] = field(default_factory=tuple)
     raw: Any | None = None
 
@@ -229,5 +230,6 @@ class LLMClient(ABC):
             response = self._complete(request)
             span.set_attribute("response", response)
             span.set_attribute("response_content", response.content)
+            span.set_attribute("response_reasoning", response.reasoning)
             span.set_attribute("response_tool_calls", response.tool_calls)
             return response

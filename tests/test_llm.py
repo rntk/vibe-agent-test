@@ -278,6 +278,41 @@ def test_llamacpp_adapter_parses_text_and_tool_call_responses() -> None:
     )
 
 
+def test_llamacpp_adapter_extracts_reasoning_from_response_fields() -> None:
+    response = LLamaCPP.from_provider_response(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "reasoning_content": "I should answer directly.",
+                        "content": "plain answer",
+                    }
+                }
+            ]
+        }
+    )
+
+    assert response.reasoning == "I should answer directly."
+    assert response.content == "plain answer"
+
+
+def test_llamacpp_adapter_extracts_reasoning_from_think_tags() -> None:
+    response = LLamaCPP.from_provider_response(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "<think>Check inputs first.</think>\nplain answer",
+                    }
+                }
+            ]
+        }
+    )
+
+    assert response.reasoning == "Check inputs first."
+    assert response.content == "plain answer"
+
+
 def test_openai_adapter_transforms_request_and_tool_calls() -> None:
     sdk_client = FakeOpenAIClient()
     client = OpenAIChatCompletionsClient(

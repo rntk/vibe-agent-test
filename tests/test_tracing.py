@@ -90,6 +90,36 @@ def test_write_trace_html_renders_conversation_from_trace_file(tmp_path: Path) -
     assert "Hi there." in html
 
 
+def test_write_trace_html_renders_llm_reasoning(tmp_path: Path) -> None:
+    trace = Trace()
+    output_file = tmp_path / "trace.json"
+
+    with trace.span(
+        "llm.complete",
+        {
+            "all_messages": [LLMMessage(role="user", content="Hello")],
+            "response": LLMResponse(
+                content="Hi there.",
+                reasoning="The greeting should be brief.",
+            ),
+            "message_count": 1,
+        },
+    ):
+        pass
+    trace.flush(output_file)
+
+    html_file = write_trace_html(output_file)
+    html = html_file.read_text(encoding="utf-8")
+    data = json.loads(output_file.read_text(encoding="utf-8"))
+
+    assert data["spans"][0]["attributes"]["response"]["reasoning"] == (
+        "The greeting should be brief."
+    )
+    assert "Reasoning" in html
+    assert "The greeting should be brief." in html
+    assert "Hi there." in html
+
+
 def test_trace_deduplicates_appended_message_history() -> None:
     trace = Trace()
     first_message = LLMMessage(role="user", content="first prompt")
