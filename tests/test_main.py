@@ -127,18 +127,14 @@ def test_run_execution_mode_preserves_full_history_across_tool_turns(
         "user",
         "assistant",
         "tool",
-        "user",
         "assistant",
         "tool",
-        "user",
     ]
     user_contents = [
         msg.content for msg in third_request.all_messages() if msg.role == "user"
     ]
     assert user_contents == [
         "Read a file twice.",
-        "Continue.",
-        "Continue.",
     ]
 
 

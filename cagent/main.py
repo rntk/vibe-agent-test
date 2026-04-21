@@ -54,8 +54,12 @@ def run_plan_mode(file_path: str) -> None:
     max_iterations = 20
 
     for iteration in range(max_iterations):
-        user_prompt = prompt if iteration == 0 else "Continue."
-        user_message = LLMMessage(role="user", content=user_prompt)
+        if iteration == 0:
+            user_prompt = prompt
+            user_message = LLMMessage(role="user", content=user_prompt)
+            messages.append(user_message)
+        else:
+            user_prompt = ""
         response = fast_client.complete(
             user_prompt,
             tools=PLAN_TOOLS,
@@ -64,7 +68,6 @@ def run_plan_mode(file_path: str) -> None:
 
         if response.tool_calls:
             tool_calls = _tool_calls_with_ids(response.tool_calls, iteration)
-            messages.append(user_message)
             messages.append(
                 LLMMessage(
                     role="assistant",
@@ -121,8 +124,12 @@ def run_implementation_mode(file_path: str) -> None:
     max_iterations = 20
 
     for iteration in range(max_iterations):
-        user_prompt = task_content if iteration == 0 else "Continue."
-        user_message = LLMMessage(role="user", content=user_prompt)
+        if iteration == 0:
+            user_prompt = task_content
+            user_message = LLMMessage(role="user", content=user_prompt)
+            messages.append(user_message)
+        else:
+            user_prompt = ""
         response = fast_client.complete(
             user_prompt,
             system_prompt=system_prompt,
@@ -132,7 +139,6 @@ def run_implementation_mode(file_path: str) -> None:
 
         if response.tool_calls:
             tool_calls = _tool_calls_with_ids(response.tool_calls, iteration)
-            messages.append(user_message)
             messages.append(
                 LLMMessage(
                     role="assistant",
@@ -185,11 +191,11 @@ def run_execution_mode(plan_path: str) -> None:
 
     messages: list[LLMMessage] = []
     initial_user_message = LLMMessage(role="user", content=plan_content)
+    messages.append(initial_user_message)
     max_iterations = 20
 
     for iteration in range(max_iterations):
-        user_prompt = initial_user_message.content if iteration == 0 else "Continue."
-        user_message = LLMMessage(role="user", content=user_prompt)
+        user_prompt = plan_content if iteration == 0 else ""
         response = llm.complete(
             user_prompt,
             system_prompt=system_prompt,
@@ -199,7 +205,6 @@ def run_execution_mode(plan_path: str) -> None:
 
         if response.tool_calls:
             tool_calls = _tool_calls_with_ids(response.tool_calls, iteration)
-            messages.append(user_message)
             messages.append(
                 LLMMessage(
                     role="assistant",

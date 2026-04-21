@@ -163,7 +163,8 @@ class LLMRequest:
         if self.system_prompt:
             messages.append(LLMMessage(role="system", content=self.system_prompt))
         messages.extend(self.messages)
-        messages.append(LLMMessage(role="user", content=self.user_prompt))
+        if self.user_prompt:
+            messages.append(LLMMessage(role="user", content=self.user_prompt))
         return tuple(messages)
 
 
