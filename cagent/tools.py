@@ -205,7 +205,12 @@ def _format_bash_output(
     stderr: str,
 ) -> str:
     exit_code_text = "timeout" if exit_code is None else str(exit_code)
-    return f"exit_code: {exit_code_text}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    parts = [f"exit_code: {exit_code_text}"]
+    if stdout:
+        parts.append(f"stdout:\n{stdout}")
+    if stderr:
+        parts.append(f"stderr:\n{stderr}")
+    return "\n".join(parts)
 
 
 def run_tool(name: str, arguments: Mapping[str, Any]) -> str:

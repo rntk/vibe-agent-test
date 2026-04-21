@@ -80,6 +80,24 @@ def test_bash_returns_exit_code_stdout_and_stderr() -> None:
     assert "stderr:\nerror" in result
 
 
+def test_bash_skips_empty_stdout() -> None:
+    result = bash("printf error >&2; exit 1")
+
+    assert result == "exit_code: 1\nstderr:\nerror"
+
+
+def test_bash_skips_empty_stderr() -> None:
+    result = bash("printf normal; exit 0")
+
+    assert result == "exit_code: 0\nstdout:\nnormal"
+
+
+def test_bash_skips_empty_stdout_and_stderr() -> None:
+    result = bash("exit 0")
+
+    assert result == "exit_code: 0"
+
+
 def test_run_tool_dispatches_bash_with_cwd(tmp_path: Path) -> None:
     result = run_tool(
         "bash",
