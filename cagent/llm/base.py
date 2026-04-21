@@ -84,8 +84,14 @@ BASH_TOOL = ToolDefinition(
 WRITE_FILE_TOOL = ToolDefinition(
     name="write_file",
     description=(
-        "Write, append, or replace a 1-based inclusive line range in a text "
-        "file. Creates parent directories for full-file writes."
+        "Use this tool to create, overwrite, or surgically update a text file. "
+        "You can replace the entire file, append to it, or replace a specific "
+        "1-based inclusive line range by providing start_line and/or end_line. "
+        "This is the preferred way to edit files. To make a small change, read "
+        "the file with read_file first, note the line numbers you want to change, "
+        "then call write_file with start_line and end_line set to those numbers "
+        "and content set to the replacement text. Creates parent directories for "
+        "new files."
     ),
     parameters={
         "type": "object",
