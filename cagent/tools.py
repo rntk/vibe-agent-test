@@ -149,7 +149,7 @@ def _format_file_content(
     )
     if numbered_content and not numbered_content.endswith("\n"):
         numbered_content += "\n"
-    return f'<file name="{escape(path, quote=True)}">\n{numbered_content}</file>'
+    return f'<file name="{escape(path, quote=True)}" note="This file content was enriched with line numbers as a prefix">\n{numbered_content}</file>'
 
 
 def _normalize_line_replacement(content: str, *, has_following_lines: bool) -> str:
