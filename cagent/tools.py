@@ -11,7 +11,8 @@ from cagent.llm.base import BASH_TOOL, READ_FILE_TOOL, WRITE_FILE_TOOL, ToolCall
 from cagent.tracing import get_trace
 
 BUILTIN_TOOLS: tuple[ToolDefinition, ...] = (READ_FILE_TOOL, BASH_TOOL, WRITE_FILE_TOOL)
-__all__ = ["BUILTIN_TOOLS", "bash", "read_file", "run_tool", "run_tool_call", "write_file"]
+PLAN_TOOLS: tuple[ToolDefinition, ...] = (READ_FILE_TOOL, BASH_TOOL)
+__all__ = ["BUILTIN_TOOLS", "PLAN_TOOLS", "bash", "read_file", "run_tool", "run_tool_call", "write_file"]
 
 
 def _optional_int(arguments: Mapping[str, Any], key: str) -> int | None:

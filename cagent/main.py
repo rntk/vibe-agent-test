@@ -12,7 +12,7 @@ from pathlib import Path
 from cagent.config import load_fast_api_config, load_smart_api_config
 from cagent.llm import LLMClient, LLMMessage, LLMRequest, LLMResponse, ToolCall
 from cagent.llm.llamacpp import LLamaCPP
-from cagent.tools import BUILTIN_TOOLS, run_tool_call
+from cagent.tools import BUILTIN_TOOLS, PLAN_TOOLS, run_tool_call
 from cagent.tracing import Trace, reset_trace, set_trace
 
 
@@ -58,7 +58,7 @@ def run_plan_mode(file_path: str) -> None:
         user_message = LLMMessage(role="user", content=user_prompt)
         response = fast_client.complete(
             user_prompt,
-            tools=BUILTIN_TOOLS,
+            tools=PLAN_TOOLS,
             messages=messages,
         )
 

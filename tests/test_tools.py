@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from cagent.llm import BASH_TOOL, READ_FILE_TOOL, WRITE_FILE_TOOL, ToolCall
-from cagent.tools import BUILTIN_TOOLS, bash, read_file, run_tool, run_tool_call, write_file
+from cagent.tools import BUILTIN_TOOLS, PLAN_TOOLS, bash, read_file, run_tool, run_tool_call, write_file
 
 
 def test_read_file_reads_full_file(tmp_path: Path) -> None:
@@ -132,3 +132,9 @@ def test_read_file_tool_is_registered() -> None:
     assert READ_FILE_TOOL.parameters["required"] == ["path"]
     assert BASH_TOOL.parameters["required"] == ["command"]
     assert WRITE_FILE_TOOL.parameters["required"] == ["path", "content"]
+
+
+def test_plan_tools_excludes_write_file() -> None:
+    assert READ_FILE_TOOL in PLAN_TOOLS
+    assert BASH_TOOL in PLAN_TOOLS
+    assert WRITE_FILE_TOOL not in PLAN_TOOLS
