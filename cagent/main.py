@@ -55,8 +55,8 @@ def run_plan_mode(file_path: str) -> None:
 
     for iteration in range(max_iterations):
         if iteration == 0:
-            user_prompt = prompt
-            user_message = LLMMessage(role="user", content=user_prompt)
+            user_prompt = ""
+            user_message = LLMMessage(role="user", content=prompt)
             messages.append(user_message)
         else:
             user_prompt = ""
@@ -125,8 +125,8 @@ def run_implementation_mode(file_path: str) -> None:
 
     for iteration in range(max_iterations):
         if iteration == 0:
-            user_prompt = task_content
-            user_message = LLMMessage(role="user", content=user_prompt)
+            user_prompt = ""
+            user_message = LLMMessage(role="user", content=task_content)
             messages.append(user_message)
         else:
             user_prompt = ""
@@ -195,7 +195,7 @@ def run_execution_mode(plan_path: str) -> None:
     max_iterations = 20
 
     for iteration in range(max_iterations):
-        user_prompt = plan_content if iteration == 0 else ""
+        user_prompt = ""
         response = llm.complete(
             user_prompt,
             system_prompt=system_prompt,
@@ -286,8 +286,16 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    logging.basicConfig(level=logging.INFO)
+    logging.info(
+        "Start params: plan=%s, execute=%s, implementation=%s, trace=%s",
+        args.plan,
+        args.execute,
+        args.implementation,
+        args.trace,
+    )
+
     if args.trace is not None:
-        logging.basicConfig(level=logging.INFO)
         trace = Trace()
         token = set_trace(trace)
         trace_file = _trace_file_from_arg(args.trace)
