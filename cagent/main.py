@@ -50,16 +50,56 @@ def run_plan_mode(file_path: str) -> None:
     plan_template = Path("prompts/plan.md").read_text(encoding="utf-8")
     prompt = plan_template.replace("{task}", task_content)
 
-    response = fast_client.complete(prompt, tools=BUILTIN_TOOLS)
+    messages: list[LLMMessage] = []
+    max_iterations = 20
 
-    plans_dir = Path("plans")
-    plans_dir.mkdir(parents=True, exist_ok=True)
+    for iteration in range(max_iterations):
+        user_prompt = prompt if iteration == 0 else "Continue."
+        user_message = LLMMessage(role="user", content=user_prompt)
+        response = fast_client.complete(
+            user_prompt,
+            tools=BUILTIN_TOOLS,
+            messages=messages,
+        )
 
-    timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
-    plan_file = plans_dir / f"plan_{timestamp}.md"
-    plan_file.write_text(response.content or "", encoding="utf-8")
+        if response.tool_calls:
+            tool_calls = _tool_calls_with_ids(response.tool_calls, iteration)
+            messages.append(user_message)
+            messages.append(
+                LLMMessage(
+                    role="assistant",
+                    content=response.content,
+                    tool_calls=tool_calls,
+                )
+            )
+            for tool_call in tool_calls:
+                try:
+                    result = run_tool_call(tool_call)
+                except Exception as exc:
+                    result = f"Error: {exc}"
+                messages.append(
+                    LLMMessage(
+                        role="tool",
+                        content=result,
+                        tool_call_id=tool_call.id or "",
+                    )
+                )
+        else:
+            plans_dir = Path("plans")
+            plans_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Plan saved to {plan_file}")
+            timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
+            plan_file = plans_dir / f"plan_{timestamp}.md"
+            plan_file.write_text(response.content or "", encoding="utf-8")
+
+            print(f"Plan saved to {plan_file}")
+            return
+
+    print(
+        "Error: Maximum iterations reached without final result.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def run_execution_mode(plan_path: str) -> None:

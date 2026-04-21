@@ -289,3 +289,106 @@ def test_run_plan_mode_saves_plan(
     captured = capsys.readouterr()
     assert "Plan saved to" in captured.out
     assert (tmp_path / "plans").is_dir()
+
+
+def test_run_plan_mode_calls_tools_and_loops(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    import os
+
+    task_file = tmp_path / "task.txt"
+    task_file.write_text("read and plan", encoding="utf-8")
+
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "plan.md").write_text("Task: {task}", encoding="utf-8")
+
+    responses = [
+        LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCall(
+                    id="call_1",
+                    name="read_file",
+                    arguments={"path": str(task_file)},
+                )
+            ],
+        ),
+        LLMResponse(content="# Plan\n1. Read the file.\n2. Done."),
+    ]
+    client = FakeLLMClient(responses)
+
+    original_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with patch("cagent.main.create_fast_api_client", return_value=client):
+            run_plan_mode(str(task_file))
+    finally:
+        os.chdir(original_cwd)
+
+    captured = capsys.readouterr()
+    assert "Plan saved to" in captured.out
+    assert client.call_index == 2
+
+    # Verify conversation history includes tool result
+    second_request = client.requests[1]
+    roles = [msg.role for msg in second_request.all_messages()]
+    assert "tool" in roles
+
+
+def test_run_plan_mode_exits_on_max_iterations(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    import os
+
+    task_file = tmp_path / "task.txt"
+    task_file.write_text("loop forever", encoding="utf-8")
+
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "plan.md").write_text("Task: {task}", encoding="utf-8")
+
+    # Always return a tool call so it never finishes
+    responses = [
+        LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCall(
+                    id=f"call_{i}",
+                    name="read_file",
+                    arguments={"path": str(task_file)},
+                )
+            ],
+        )
+        for i in range(25)
+    ]
+    client = FakeLLMClient(responses)
+
+    original_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with (
+            patch("cagent.main.create_fast_api_client", return_value=client),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            run_plan_mode(str(task_file))
+    finally:
+        os.chdir(original_cwd)
+
+    assert exc_info.value.code == 1
+    assert client.call_index == 20
+
+
+def test_run_plan_mode_exits_when_no_client_configured(tmp_path: Path) -> None:
+    task_file = tmp_path / "task.txt"
+    task_file.write_text("test task", encoding="utf-8")
+
+    with (
+        patch("cagent.main.create_fast_api_client", return_value=None),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        run_plan_mode(str(task_file))
+
+    assert exc_info.value.code == 1
