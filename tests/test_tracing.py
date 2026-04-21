@@ -30,7 +30,8 @@ def test_trace_collects_nested_llm_and_tool_spans(tmp_path: Path) -> None:
         reset_trace(token)
 
     assert response.content == "response to prompt"
-    assert tool_result == "hello\n"
+    expected_tool_result = f'<file name="{sample_file}">\n1: hello\n</file>'
+    assert tool_result == expected_tool_result
     assert len(trace.roots) == 1
     assert [child.name for child in trace.roots[0].children] == [
         "llm.complete",
@@ -43,9 +44,9 @@ def test_trace_collects_nested_llm_and_tool_spans(tmp_path: Path) -> None:
 
     tool_span = trace.roots[0].children[1]
     assert tool_span.attributes["tool_name"] == "read_file"
-    assert tool_span.attributes["result"] == "hello\n"
+    assert tool_span.attributes["result"] == expected_tool_result
     assert [child.name for child in tool_span.children] == ["tool.run"]
-    assert tool_span.children[0].attributes["result"] == "hello\n"
+    assert tool_span.children[0].attributes["result"] == expected_tool_result
 
 
 def test_trace_flush_writes_json_file(tmp_path: Path) -> None:

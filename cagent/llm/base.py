@@ -25,7 +25,9 @@ READ_FILE_TOOL = ToolDefinition(
     name="read_file",
     description=(
         "Read a text file from disk. Optionally pass 1-based inclusive line "
-        "range parameters to read only part of the file."
+        "range parameters to read only part of the file. Results include "
+        "1-based line number prefixes inside a file XML-like tag. These "
+        "prefixes are metadata and are not part of the original file content."
     ),
     parameters={
         "type": "object",
@@ -82,8 +84,8 @@ BASH_TOOL = ToolDefinition(
 WRITE_FILE_TOOL = ToolDefinition(
     name="write_file",
     description=(
-        "Write or append content to a text file. Creates parent directories "
-        "if they do not exist."
+        "Write, append, or replace a 1-based inclusive line range in a text "
+        "file. Creates parent directories for full-file writes."
     ),
     parameters={
         "type": "object",
@@ -99,6 +101,23 @@ WRITE_FILE_TOOL = ToolDefinition(
             "append": {
                 "type": "boolean",
                 "description": "If true, append content instead of overwriting.",
+            },
+            "start_line": {
+                "type": "integer",
+                "minimum": 1,
+                "description": (
+                    "Optional 1-based first line to replace. If omitted while "
+                    "end_line is set, replacement starts at line 1."
+                ),
+            },
+            "end_line": {
+                "type": "integer",
+                "minimum": 1,
+                "description": (
+                    "Optional 1-based last line to replace, inclusive. If "
+                    "omitted while start_line is set, replacement continues "
+                    "through the end of the file."
+                ),
             },
         },
         "required": ["path", "content"],

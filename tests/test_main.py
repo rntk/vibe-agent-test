@@ -11,6 +11,7 @@ from cagent.main import (
     EchoLLMClient,
     main,
     run_execution_mode,
+    run_implementation_mode,
     run_plan_mode,
 )
 
@@ -212,6 +213,107 @@ def test_run_execution_mode_exits_on_max_iterations(tmp_path: Path) -> None:
         pytest.raises(SystemExit) as exc_info,
     ):
         run_execution_mode(str(plan_file))
+
+    assert exc_info.value.code == 1
+    assert client.call_index == 20
+
+
+def test_run_implementation_mode_prints_final_content(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    prompt_file = tmp_path / "prompt.md"
+    prompt_file.write_text("Implement something.", encoding="utf-8")
+
+    client = FakeLLMClient([LLMResponse(content="All done.")])
+
+    with patch("cagent.main.create_fast_api_client", return_value=client):
+        run_implementation_mode(str(prompt_file))
+
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "All done."
+    assert client.call_index == 1
+    assert client.requests[0].tools
+
+
+def test_run_implementation_mode_calls_tools_and_loops(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    prompt_file = tmp_path / "prompt.md"
+    prompt_file.write_text("Write a file.", encoding="utf-8")
+
+    target_file = tmp_path / "output.txt"
+
+    responses = [
+        LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCall(
+                    id="call_1",
+                    name="write_file",
+                    arguments={"path": str(target_file), "content": "hello"},
+                )
+            ],
+        ),
+        LLMResponse(content="File written successfully."),
+    ]
+    client = FakeLLMClient(responses)
+
+    with patch("cagent.main.create_fast_api_client", return_value=client):
+        run_implementation_mode(str(prompt_file))
+
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "File written successfully."
+    assert client.call_index == 2
+    assert target_file.read_text(encoding="utf-8") == "hello"
+
+    # Verify conversation history includes tool result
+    second_request = client.requests[1]
+    roles = [msg.role for msg in second_request.all_messages()]
+    assert "tool" in roles
+
+
+def test_run_implementation_mode_exits_when_no_client_configured(
+    tmp_path: Path,
+) -> None:
+    prompt_file = tmp_path / "prompt.md"
+    prompt_file.write_text("Implement something.", encoding="utf-8")
+
+    with (
+        patch("cagent.main.create_fast_api_client", return_value=None),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        run_implementation_mode(str(prompt_file))
+
+    assert exc_info.value.code == 1
+
+
+def test_run_implementation_mode_exits_on_max_iterations(tmp_path: Path) -> None:
+    prompt_file = tmp_path / "prompt.md"
+    prompt_file.write_text("Loop forever.", encoding="utf-8")
+
+    # Always return a tool call so it never finishes
+    responses = [
+        LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCall(
+                    id=f"call_{i}",
+                    name="read_file",
+                    arguments={"path": str(prompt_file)},
+                )
+            ],
+        )
+        for i in range(25)
+    ]
+    client = FakeLLMClient(responses)
+
+    with (
+        patch("cagent.main.create_fast_api_client", return_value=client),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        run_implementation_mode(str(prompt_file))
 
     assert exc_info.value.code == 1
     assert client.call_index == 20

@@ -4,15 +4,32 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Mapping
+from html import escape
 from pathlib import Path
 from typing import Any
 
-from cagent.llm.base import BASH_TOOL, READ_FILE_TOOL, WRITE_FILE_TOOL, ToolCall, ToolDefinition
+from cagent.llm.base import (
+    BASH_TOOL,
+    READ_FILE_TOOL,
+    WRITE_FILE_TOOL,
+    ToolCall,
+    ToolDefinition,
+)
 from cagent.tracing import get_trace
 
 BUILTIN_TOOLS: tuple[ToolDefinition, ...] = (READ_FILE_TOOL, BASH_TOOL, WRITE_FILE_TOOL)
 PLAN_TOOLS: tuple[ToolDefinition, ...] = (READ_FILE_TOOL, BASH_TOOL)
-__all__ = ["BUILTIN_TOOLS", "PLAN_TOOLS", "bash", "read_file", "run_tool", "run_tool_call", "write_file"]
+IMPLEMENTATION_TOOLS: tuple[ToolDefinition, ...] = (READ_FILE_TOOL, BASH_TOOL, WRITE_FILE_TOOL)
+__all__ = [
+    "BUILTIN_TOOLS",
+    "PLAN_TOOLS",
+    "IMPLEMENTATION_TOOLS",
+    "bash",
+    "read_file",
+    "run_tool",
+    "run_tool_call",
+    "write_file",
+]
 
 
 def _optional_int(arguments: Mapping[str, Any], key: str) -> int | None:
@@ -32,7 +49,7 @@ def read_file(
     end_line: int | None = None,
     encoding: str = "utf-8",
 ) -> str:
-    """Read a whole text file or a 1-based inclusive line range."""
+    """Read a text file or line range with line numbers in a file tag."""
 
     if start_line is not None and start_line < 1:
         msg = "start_line must be greater than or equal to 1."
@@ -50,13 +67,11 @@ def read_file(
         raise FileNotFoundError(msg)
 
     content = file_path.read_text(encoding=encoding)
-    if start_line is None and end_line is None:
-        return content
-
     lines = content.splitlines(keepends=True)
     start_index = 0 if start_line is None else start_line - 1
     end_index = end_line if end_line is not None else len(lines)
-    return "".join(lines[start_index:end_index])
+    selected_lines = lines[start_index:end_index]
+    return _format_file_content(path, selected_lines, start_line=start_index + 1)
 
 
 def write_file(
@@ -64,16 +79,79 @@ def write_file(
     content: str,
     *,
     append: bool = False,
+    start_line: int | None = None,
+    end_line: int | None = None,
     encoding: str = "utf-8",
 ) -> str:
-    """Write content to a text file, creating parent directories if needed."""
+    """Write, append, or replace a 1-based inclusive line range in a text file."""
+
+    if start_line is not None and start_line < 1:
+        msg = "start_line must be greater than or equal to 1."
+        raise ValueError(msg)
+    if end_line is not None and end_line < 1:
+        msg = "end_line must be greater than or equal to 1."
+        raise ValueError(msg)
+    if start_line is not None and end_line is not None and end_line < start_line:
+        msg = "end_line must be greater than or equal to start_line."
+        raise ValueError(msg)
+    if append and (start_line is not None or end_line is not None):
+        msg = "append cannot be combined with start_line or end_line."
+        raise ValueError(msg)
 
     file_path = Path(path)
+
+    if start_line is not None or end_line is not None:
+        if not file_path.is_file():
+            msg = f"File not found: {path}"
+            raise FileNotFoundError(msg)
+        existing_content = file_path.read_text(encoding=encoding)
+        lines = existing_content.splitlines(keepends=True)
+        line_count = len(lines)
+        range_start = 1 if start_line is None else start_line
+        range_end = line_count if end_line is None else end_line
+        if range_start > line_count:
+            msg = f"start_line must be less than or equal to {line_count}."
+            raise ValueError(msg)
+        if range_end > line_count:
+            msg = f"end_line must be less than or equal to {line_count}."
+            raise ValueError(msg)
+
+        replacement = _normalize_line_replacement(
+            content,
+            has_following_lines=range_end < line_count,
+        )
+        updated_content = "".join(
+            [*lines[: range_start - 1], replacement, *lines[range_end:]]
+        )
+        file_path.write_text(updated_content, encoding=encoding)
+        return f"Updated lines {range_start}-{range_end} in {path}"
+
     file_path.parent.mkdir(parents=True, exist_ok=True)
     mode = "a" if append else "w"
     with file_path.open(mode, encoding=encoding) as f:
         f.write(content)
     return f"{'Appended to' if append else 'Wrote to'} {path}"
+
+
+def _format_file_content(
+    path: str,
+    lines: list[str],
+    *,
+    start_line: int,
+) -> str:
+    numbered_content = "".join(
+        f"{line_number}: {line}"
+        for line_number, line in enumerate(lines, start=start_line)
+    )
+    if numbered_content and not numbered_content.endswith("\n"):
+        numbered_content += "\n"
+    return f'<file name="{escape(path, quote=True)}">\n{numbered_content}</file>'
+
+
+def _normalize_line_replacement(content: str, *, has_following_lines: bool) -> str:
+    if content and has_following_lines and not content.endswith(("\n", "\r")):
+        return f"{content}\n"
+    return content
 
 
 def bash(
@@ -181,7 +259,13 @@ def _run_tool(name: str, arguments: Mapping[str, Any]) -> str:
         if append is not None and not isinstance(append, bool):
             msg = "append must be a boolean."
             raise TypeError(msg)
-        return write_file(path, content, append=bool(append))
+        return write_file(
+            path,
+            content,
+            append=bool(append),
+            start_line=_optional_int(arguments, "start_line"),
+            end_line=_optional_int(arguments, "end_line"),
+        )
 
     msg = f"Unknown tool: {name}"
     raise ValueError(msg)
