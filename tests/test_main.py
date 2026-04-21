@@ -345,6 +345,9 @@ def test_main_writes_trace_to_non_empty_trace_path(
     assert data["span_count"] == 2
     assert data["spans"][0]["name"] == "cagent.main"
     assert data["spans"][0]["attributes"]["trace_file"] == str(trace_file)
+    html = trace_file.with_suffix(".html").read_text(encoding="utf-8")
+    assert "Conversation" in html
+    assert "Hello, World!" in html
 
 
 def test_main_does_not_write_trace_for_empty_trace_path(

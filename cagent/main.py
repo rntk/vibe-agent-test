@@ -13,7 +13,7 @@ from cagent.config import load_fast_api_config, load_smart_api_config
 from cagent.llm import LLMClient, LLMMessage, LLMRequest, LLMResponse, ToolCall
 from cagent.llm.llamacpp import LLamaCPP
 from cagent.tools import BUILTIN_TOOLS, IMPLEMENTATION_TOOLS, PLAN_TOOLS, run_tool_call
-from cagent.tracing import Trace, reset_trace, set_trace
+from cagent.tracing import Trace, reset_trace, set_trace, write_trace_html
 
 
 class EchoLLMClient(LLMClient):
@@ -286,6 +286,7 @@ def main() -> None:
         trace = Trace()
         token = set_trace(trace)
         trace_file = _trace_file_from_arg(args.trace)
+        trace_html_file = _trace_html_file_from_trace_file(trace_file)
         try:
             with trace.span(
                 "cagent.main",
@@ -294,11 +295,14 @@ def main() -> None:
                     "execute": args.execute,
                     "implementation": args.implementation,
                     "trace_file": trace_file,
+                    "trace_html_file": trace_html_file,
                 },
             ):
                 _run_args(args)
         finally:
             trace.flush(trace_file)
+            if trace_file and trace_html_file:
+                write_trace_html(trace_file, trace_html_file)
             reset_trace(token)
         return
 
@@ -338,6 +342,14 @@ def _trace_file_from_arg(trace_arg: str | None) -> str | None:
     return trace_arg
 
 
+def _trace_html_file_from_trace_file(trace_file: str | None) -> str | None:
+    """Return the sidecar HTML trace path for a JSON trace output path."""
+
+    if trace_file is None:
+        return None
+    return str(Path(trace_file).with_suffix(".html"))
+
+
 __all__ = [
     "EchoLLMClient",
     "create_fast_api_client",
@@ -348,6 +360,7 @@ __all__ = [
     "run_plan_mode",
     "_run_args",
     "_trace_file_from_arg",
+    "_trace_html_file_from_trace_file",
 ]
 
 

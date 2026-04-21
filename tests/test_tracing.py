@@ -5,7 +5,7 @@ from pathlib import Path
 
 from cagent.llm import LLMClient, LLMMessage, LLMRequest, LLMResponse, ToolCall
 from cagent.tools import run_tool_call
-from cagent.tracing import Trace, reset_trace, set_trace
+from cagent.tracing import Trace, reset_trace, set_trace, write_trace_html
 
 
 class TraceFakeLLMClient(LLMClient):
@@ -60,6 +60,34 @@ def test_trace_flush_writes_json_file(tmp_path: Path) -> None:
     data = json.loads(output_file.read_text(encoding="utf-8"))
     assert data["span_count"] == 1
     assert data["spans"][0]["name"] == "root"
+
+
+def test_write_trace_html_renders_conversation_from_trace_file(tmp_path: Path) -> None:
+    trace = Trace()
+    output_file = tmp_path / "trace.json"
+
+    with trace.span(
+        "llm.complete",
+        {
+            "all_messages": [
+                LLMMessage(role="system", content="Be brief."),
+                LLMMessage(role="user", content="Hello"),
+            ],
+            "response": LLMResponse(content="Hi there."),
+            "message_count": 2,
+        },
+    ):
+        pass
+    trace.flush(output_file)
+
+    html_file = write_trace_html(output_file)
+    html = html_file.read_text(encoding="utf-8")
+
+    assert html_file == tmp_path / "trace.html"
+    assert "Conversation" in html
+    assert "Be brief." in html
+    assert "Hello" in html
+    assert "Hi there." in html
 
 
 def test_trace_deduplicates_appended_message_history() -> None:
