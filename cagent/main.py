@@ -115,7 +115,6 @@ def run_implementation_mode(file_path: str) -> None:
         "You are an expert software engineering agent. "
         "You have been given a plan to implement. "
         "Use the available tools to complete the task step by step. "
-        "When you are finished, provide a concise summary of what was done."
     )
 
     messages: list[LLMMessage] = []
@@ -182,7 +181,6 @@ def run_execution_mode(plan_path: str) -> None:
         "You are an expert software engineering agent. "
         "You have been given a plan to implement. "
         "Use the available tools to complete the task step by step. "
-        "When you are finished, provide a concise summary of what was done."
     )
 
     messages: list[LLMMessage] = []
