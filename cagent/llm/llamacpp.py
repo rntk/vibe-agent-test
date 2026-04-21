@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import traceback
 from collections.abc import Mapping, Sequence
 from http.client import HTTPConnection, HTTPSConnection
 from typing import Any, cast
@@ -247,12 +248,42 @@ class LLamaCPP(LLMClient):
             conn.request("POST", "/v1/chat/completions", body, headers)
             res = conn.getresponse()
             resp_body = res.read()
-            if res.status != 200:
-                err_msg = f"{res.status} - {res.reason} - {resp_body}"
-                logging.error(err_msg)
-                raise RuntimeError(f"LLM API error: {res.status} {res.reason}")
 
-            resp = json.loads(resp_body)
+            # Build verbose error context for all error cases
+            error_context = {
+                "status_code": res.status,
+                "status_reason": res.reason,
+                "response_body": resp_body.decode("utf-8", errors="replace")
+                if resp_body
+                else None,
+                "request_model": self.__model,
+                "request_host": self.__host,
+                "request_endpoint": "/v1/chat/completions",
+            }
+
+            if res.status != 200:
+                err_msg = (
+                    f"LLM API error (HTTP {res.status} {res.reason})\n"
+                    f"  Host: {self.__host}\n"
+                    f"  Endpoint: /v1/chat/completions\n"
+                    f"  Model: {self.__model}\n"
+                    f"  Response body: {error_context['response_body']}"
+                )
+                logging.error(err_msg)
+                raise RuntimeError(err_msg) from None
+
+            try:
+                resp = json.loads(resp_body)
+            except json.JSONDecodeError as e:
+                err_msg = (
+                    f"Invalid JSON response from LLM\n"
+                    f"  Status: {res.status} {res.reason}\n"
+                    f"  Host: {self.__host}\n"
+                    f"  Response body: {error_context['response_body']}\n"
+                    f"  JSON error: {e}"
+                )
+                logging.error(err_msg)
+                raise RuntimeError(err_msg) from e
 
             reasoning, content = self._extract_reasoning_and_content(resp)
 
@@ -268,11 +299,18 @@ class LLamaCPP(LLMClient):
             tool_calls = self.from_provider_tool_calls(message.get("tool_calls"))
 
             if content is None and not tool_calls:
-                logging.error(
-                    "LLM response missing 'choices[0].message.content' and tool_calls"
+                err_msg = (
+                    f"LLM returned empty response\n"
+                    f"  Host: {self.__host}\n"
+                    f"  Model: {self.__model}\n"
+                    f"  Status: {res.status} {res.reason}\n"
+                    f"  Choices count: {len(choices) if isinstance(choices, list) else 'N/A'}\n"
+                    f"  First choice keys: {list(first_choice.keys()) if isinstance(first_choice, dict) else 'N/A'}\n"
+                    f"  Message keys: {list(message.keys()) if isinstance(message, dict) else 'N/A'}\n"
+                    f"  Full response: {json.dumps(resp, indent=2, default=str)}"
                 )
-                logging.error(f"Full response: {resp}")
-                raise RuntimeError("LLM returned empty response")
+                logging.error(err_msg)
+                raise RuntimeError(err_msg) from None
             if reasoning:
                 logging.info(f"LLM reasoning: {reasoning}")
             if content:
@@ -281,16 +319,18 @@ class LLamaCPP(LLMClient):
                 logging.info(f"LLM tool calls: {[tc.name for tc in tool_calls]}")
 
             return LLMResponse(content=content, tool_calls=tool_calls, raw=resp)
-        except json.JSONDecodeError as e:
-            err_msg = f"JSON decode error: {e}"
-            logging.error(err_msg)
-            raise RuntimeError(f"Invalid JSON response from LLM: {e}") from e
         except RuntimeError:
             raise
         except Exception as e:
-            err_msg = f"LLM call exception: {type(e).__name__}: {e}"
+            tb = traceback.format_exc()
+            err_msg = (
+                f"LLM call failed with exception: {type(e).__name__}: {e}\n"
+                f"  Host: {self.__host}\n"
+                f"  Model: {self.__model}\n"
+                f"  Traceback:\n{tb}"
+            )
             logging.error(err_msg)
-            raise RuntimeError(f"LLM call failed: {e}") from e
+            raise RuntimeError(err_msg) from e
         finally:
             conn.close()
 
