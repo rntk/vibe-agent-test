@@ -10,6 +10,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field, is_dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
@@ -45,7 +46,7 @@ class _ActiveSpan:
     token: Token[_ActiveSpan | None] | None = None
 
     def set_attribute(self, key: str, value: Any) -> None:
-        self.record.attributes[key] = _to_jsonable(value)
+        self.record.attributes[key] = self.tracer.to_trace_value(value)
 
 
 class _NoOpSpan:
@@ -84,6 +85,8 @@ class Trace:
     def __init__(self) -> None:
         self.roots: list[SpanRecord] = []
         self.spans: list[SpanRecord] = []
+        self._value_refs: dict[str, str] = {}
+        self._next_value_ref = 1
 
     @contextmanager
     def span(
@@ -97,7 +100,7 @@ class Trace:
             name=name,
             parent_id=parent.record.id if parent else None,
             started_at=time.time(),
-            attributes=_to_jsonable_dict(attributes or {}),
+            attributes=self.to_trace_dict(attributes or {}),
         )
         self.spans.append(record)
         if parent is None:
@@ -126,6 +129,13 @@ class Trace:
 
         return {
             "span_count": len(self.spans),
+            "deduplication": {
+                "value_count": len(self._value_refs),
+                "ref_format": (
+                    "Duplicate attribute values are replaced by "
+                    "{'$ref': 'trace_value_N', '$deduplicated': true}."
+                ),
+            },
             "spans": [_span_to_dict(span) for span in self.roots],
         }
 
@@ -143,6 +153,43 @@ class Trace:
             output_path = Path(file_path)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_text(rendered + "\n", encoding="utf-8")
+
+    def to_trace_dict(self, values: Mapping[str, Any]) -> dict[str, Any]:
+        """Return trace attributes with repeated container values tombstoned."""
+
+        return {key: self.to_trace_value(value) for key, value in values.items()}
+
+    def to_trace_value(self, value: Any) -> Any:
+        """Return a JSON-safe trace value, replacing duplicates with references."""
+
+        return self._deduplicate_value(_to_jsonable(value))
+
+    def _deduplicate_value(self, value: Any) -> Any:
+        if isinstance(value, Mapping):
+            deduped_mapping = {
+                str(key): self._deduplicate_value(item) for key, item in value.items()
+            }
+            return self._deduplicate_container(deduped_mapping)
+        if isinstance(value, list):
+            deduped_list = [self._deduplicate_value(item) for item in value]
+            return self._deduplicate_container(deduped_list)
+        return value
+
+    def _deduplicate_container(self, value: dict[str, Any] | list[Any]) -> Any:
+        if not value:
+            return value
+
+        fingerprint = _trace_value_fingerprint(value)
+        if fingerprint in self._value_refs:
+            return {
+                "$ref": self._value_refs[fingerprint],
+                "$deduplicated": True,
+            }
+
+        ref = f"trace_value_{self._next_value_ref}"
+        self._next_value_ref += 1
+        self._value_refs[fingerprint] = ref
+        return value
 
 
 def get_trace() -> Trace | NoOpTrace:
@@ -178,8 +225,9 @@ def _span_to_dict(span: SpanRecord) -> dict[str, Any]:
     }
 
 
-def _to_jsonable_dict(values: Mapping[str, Any]) -> dict[str, Any]:
-    return {key: _to_jsonable(value) for key, value in values.items()}
+def _trace_value_fingerprint(value: dict[str, Any] | list[Any]) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _to_jsonable(value: Any) -> Any:

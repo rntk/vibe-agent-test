@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from cagent.llm import LLMClient, LLMRequest, LLMResponse, ToolCall
+from cagent.llm import LLMClient, LLMMessage, LLMRequest, LLMResponse, ToolCall
 from cagent.tools import run_tool_call
 from cagent.tracing import Trace, reset_trace, set_trace
 
@@ -60,3 +60,28 @@ def test_trace_flush_writes_json_file(tmp_path: Path) -> None:
     data = json.loads(output_file.read_text(encoding="utf-8"))
     assert data["span_count"] == 1
     assert data["spans"][0]["name"] == "root"
+
+
+def test_trace_deduplicates_appended_message_history() -> None:
+    trace = Trace()
+    first_message = LLMMessage(role="user", content="first prompt")
+    second_message = LLMMessage(role="assistant", content="first answer")
+    third_message = LLMMessage(role="user", content="continue")
+
+    with trace.span("first", {"all_messages": [first_message, second_message]}):
+        pass
+    with trace.span(
+        "second",
+        {"all_messages": [first_message, second_message, third_message]},
+    ):
+        pass
+
+    first_messages = trace.roots[0].attributes["all_messages"]
+    second_messages = trace.roots[1].attributes["all_messages"]
+
+    assert first_messages[0]["content"] == "first prompt"
+    assert first_messages[1]["content"] == "first answer"
+    assert second_messages[0]["$deduplicated"] is True
+    assert second_messages[1]["$deduplicated"] is True
+    assert second_messages[0]["$ref"] != second_messages[1]["$ref"]
+    assert second_messages[2]["content"] == "continue"
