@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Mapping
-from html import escape
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -32,12 +32,41 @@ __all__ = [
     "BUILTIN_TOOLS",
     "PLAN_TOOLS",
     "IMPLEMENTATION_TOOLS",
+    "AdvisorInput",
+    "ToolResult",
     "bash",
     "run_tool",
     "run_tool_call",
     "search_and_replace",
     "write_file",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class AdvisorInput:
+    """Context passed to the advisor when a tool call looks like it failed."""
+
+    tool_name: str
+    command: str
+    exit_code: int | None
+    stdout: str
+    stderr: str
+
+
+@dataclass(frozen=True, slots=True)
+class ToolResult:
+    """Result of a built-in tool invocation, checkable for advisor follow-up."""
+
+    output: str
+    advisor_input: AdvisorInput | None = None
+
+    def with_advice(self, advice: str | None) -> "ToolResult":
+        """Return a new ToolResult with an advisor note prepended to output."""
+
+        if not advice:
+            return ToolResult(output=self.output)
+        note = f"[ADVISOR NOTE] {advice}\n\n"
+        return ToolResult(output=note + self.output)
 
 
 def _optional_int(arguments: Mapping[str, Any], key: str) -> int | None:
@@ -155,8 +184,8 @@ def bash(
     *,
     cwd: str | None = None,
     timeout_seconds: int | None = None,
-) -> str:
-    """Run a bash command and return exit code, stdout, and stderr."""
+) -> ToolResult:
+    """Run a bash command and return a ToolResult with optional advisor context."""
 
     if timeout_seconds is not None and timeout_seconds < 1:
         msg = "timeout_seconds must be greater than or equal to 1."
@@ -176,18 +205,41 @@ def bash(
         )
     except subprocess.TimeoutExpired as exc:
         stdout = exc.stdout or ""
-        stderr = exc.stderr or ""
-        return _format_bash_output(
+        stderr_text = (
+            f"{exc.stderr or ''}"
+            f"Command timed out after {timeout_seconds} seconds."
+        )
+        output = _format_bash_output(
             exit_code=None,
             stdout=stdout,
-            stderr=f"{stderr}Command timed out after {timeout_seconds} seconds.",
+            stderr=stderr_text,
+        )
+        return ToolResult(
+            output=output,
+            advisor_input=AdvisorInput(
+                tool_name=BASH_TOOL.name,
+                command=command,
+                exit_code=None,
+                stdout=stdout,
+                stderr=stderr_text,
+            ),
         )
 
-    return _format_bash_output(
+    output = _format_bash_output(
         exit_code=result.returncode,
         stdout=result.stdout,
         stderr=result.stderr,
     )
+    advisor_input: AdvisorInput | None = None
+    if result.returncode != 0 or result.stderr:
+        advisor_input = AdvisorInput(
+            tool_name=BASH_TOOL.name,
+            command=command,
+            exit_code=result.returncode,
+            stdout=result.stdout,
+            stderr=result.stderr,
+        )
+    return ToolResult(output=output, advisor_input=advisor_input)
 
 
 _MAX_OUTPUT_LINES = 1000
@@ -235,7 +287,7 @@ def _format_bash_output(
     return result
 
 
-def run_tool(name: str, arguments: Mapping[str, Any]) -> str:
+def run_tool(name: str, arguments: Mapping[str, Any]) -> ToolResult:
     """Run a built-in tool by name with provider-decoded arguments."""
 
     with get_trace().span(
@@ -246,11 +298,13 @@ def run_tool(name: str, arguments: Mapping[str, Any]) -> str:
         },
     ) as span:
         result = _run_tool(name, arguments)
-        span.set_attribute("result", result)
+        span.set_attribute("result", result.output)
+        if result.advisor_input is not None:
+            span.set_attribute("advisor_requested", True)
         return result
 
 
-def _run_tool(name: str, arguments: Mapping[str, Any]) -> str:
+def _run_tool(name: str, arguments: Mapping[str, Any]) -> ToolResult:
     """Run a built-in tool without adding a trace span."""
 
     if name == BASH_TOOL.name:
@@ -280,9 +334,9 @@ def _run_tool(name: str, arguments: Mapping[str, Any]) -> str:
         if not isinstance(new_text, str):
             msg = "new_text must be a string."
             raise TypeError(msg)
-        result = search_and_replace(path, old_text, new_text)
+        output = search_and_replace(path, old_text, new_text)
         input("SEARCH_AND_REPLACE breakpoint - press Enter to continue...")
-        return result
+        return ToolResult(output=output)
     if name == WRITE_FILE_TOOL.name:
         path = arguments.get("path")
         if not isinstance(path, str):
@@ -296,7 +350,7 @@ def _run_tool(name: str, arguments: Mapping[str, Any]) -> str:
         if append is not None and not isinstance(append, bool):
             msg = "append must be a boolean."
             raise TypeError(msg)
-        result = write_file(
+        output = write_file(
             path,
             content,
             append=bool(append),
@@ -304,13 +358,13 @@ def _run_tool(name: str, arguments: Mapping[str, Any]) -> str:
             end_line=_optional_int(arguments, "end_line"),
         )
         input("WRITE_FILE breakpoint - press Enter to continue...")
-        return result
+        return ToolResult(output=output)
 
     msg = f"Unknown tool: {name}"
     raise ValueError(msg)
 
 
-def run_tool_call(tool_call: ToolCall) -> str:
+def run_tool_call(tool_call: ToolCall) -> ToolResult:
     """Run a provider-neutral built-in tool call."""
 
     with get_trace().span(
@@ -323,5 +377,5 @@ def run_tool_call(tool_call: ToolCall) -> str:
         },
     ) as span:
         result = run_tool(tool_call.name, tool_call.arguments)
-        span.set_attribute("result", result)
+        span.set_attribute("result", result.output)
         return result

@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from cagent.advisor import apply_advisor
 from cagent.config import load_fast_api_config, load_smart_api_config
 from cagent.llm import LLMClient, LLMMessage, LLMRequest, LLMResponse, ToolCall
 from cagent.llm.llamacpp import LLamaCPP
@@ -77,13 +78,15 @@ def run_plan_mode(file_path: str) -> None:
             )
             for tool_call in tool_calls:
                 try:
-                    result = run_tool_call(tool_call)
+                    tool_result = run_tool_call(tool_call)
+                    tool_result = apply_advisor(tool_result, fast_client)
+                    content = tool_result.output
                 except Exception as exc:
-                    result = f"Error: {exc}"
+                    content = f"Error: {exc}"
                 messages.append(
                     LLMMessage(
                         role="tool",
-                        content=result,
+                        content=content,
                         tool_call_id=tool_call.id or "",
                     )
                 )
@@ -150,13 +153,15 @@ def run_implementation_mode(file_path: str) -> None:
             )
             for tool_call in tool_calls:
                 try:
-                    result = run_tool_call(tool_call)
+                    tool_result = run_tool_call(tool_call)
+                    tool_result = apply_advisor(tool_result, fast_client)
+                    content = tool_result.output
                 except Exception as exc:
-                    result = f"Error: {exc}"
+                    content = f"Error: {exc}"
                 messages.append(
                     LLMMessage(
                         role="tool",
-                        content=result,
+                        content=content,
                         tool_call_id=tool_call.id or "",
                     )
                 )
