@@ -81,6 +81,36 @@ BASH_TOOL = ToolDefinition(
     },
 )
 
+SEARCH_AND_REPLACE_TOOL = ToolDefinition(
+    name="search_and_replace",
+    description=(
+        "Replace an exact substring in a text file. Provide the file path, "
+        "the existing text to find, and the new text to put in its place. "
+        "The old text must match exactly (including whitespace) and must "
+        "appear exactly once in the file."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Path to the text file to modify.",
+            },
+            "old_text": {
+                "type": "string",
+                "description": "Exact text to search for in the file.",
+            },
+            "new_text": {
+                "type": "string",
+                "description": "Replacement text.",
+            },
+        },
+        "required": ["path", "old_text", "new_text"],
+        "additionalProperties": False,
+    },
+)
+
+
 WRITE_FILE_TOOL = ToolDefinition(
     name="write_file",
     description=(

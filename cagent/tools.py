@@ -11,18 +11,25 @@ from typing import Any
 from cagent.llm.base import (
     BASH_TOOL,
     READ_FILE_TOOL,
+    SEARCH_AND_REPLACE_TOOL,
     WRITE_FILE_TOOL,
     ToolCall,
     ToolDefinition,
 )
 from cagent.tracing import get_trace
 
-BUILTIN_TOOLS: tuple[ToolDefinition, ...] = (READ_FILE_TOOL, BASH_TOOL, WRITE_FILE_TOOL)
+BUILTIN_TOOLS: tuple[ToolDefinition, ...] = (
+    READ_FILE_TOOL,
+    BASH_TOOL,
+    WRITE_FILE_TOOL,
+    SEARCH_AND_REPLACE_TOOL,
+)
 PLAN_TOOLS: tuple[ToolDefinition, ...] = (READ_FILE_TOOL, BASH_TOOL)
 IMPLEMENTATION_TOOLS: tuple[ToolDefinition, ...] = (
     READ_FILE_TOOL,
     BASH_TOOL,
     WRITE_FILE_TOOL,
+    SEARCH_AND_REPLACE_TOOL,
 )
 __all__ = [
     "BUILTIN_TOOLS",
@@ -32,6 +39,7 @@ __all__ = [
     "read_file",
     "run_tool",
     "run_tool_call",
+    "search_and_replace",
     "write_file",
 ]
 
@@ -135,6 +143,41 @@ def write_file(
     with file_path.open(mode, encoding=encoding) as f:
         f.write(content)
     return f"{'Appended to' if append else 'Wrote to'} {path}"
+
+
+def search_and_replace(
+    path: str,
+    old_text: str,
+    new_text: str,
+    *,
+    encoding: str = "utf-8",
+) -> str:
+    """Replace an exact substring in a text file."""
+
+    if not old_text:
+        msg = "old_text must not be empty."
+        raise ValueError(msg)
+
+    file_path = Path(path)
+    if not file_path.is_file():
+        msg = f"File not found: {path}"
+        raise FileNotFoundError(msg)
+
+    content = file_path.read_text(encoding=encoding)
+    occurrences = content.count(old_text)
+    if occurrences == 0:
+        msg = f"old_text not found in {path}"
+        raise ValueError(msg)
+    if occurrences > 1:
+        msg = (
+            f"old_text appears {occurrences} times in {path}; "
+            "provide more context so it matches exactly once."
+        )
+        raise ValueError(msg)
+
+    updated_content = content.replace(old_text, new_text, 1)
+    file_path.write_text(updated_content, encoding=encoding)
+    return f"Replaced 1 occurrence in {path}"
 
 
 def _format_file_content(
@@ -255,6 +298,20 @@ def _run_tool(name: str, arguments: Mapping[str, Any]) -> str:
             cwd=cwd,
             timeout_seconds=_optional_int(arguments, "timeout_seconds"),
         )
+    if name == SEARCH_AND_REPLACE_TOOL.name:
+        path = arguments.get("path")
+        if not isinstance(path, str):
+            msg = "path must be a string."
+            raise TypeError(msg)
+        old_text = arguments.get("old_text")
+        if not isinstance(old_text, str):
+            msg = "old_text must be a string."
+            raise TypeError(msg)
+        new_text = arguments.get("new_text")
+        if not isinstance(new_text, str):
+            msg = "new_text must be a string."
+            raise TypeError(msg)
+        return search_and_replace(path, old_text, new_text)
     if name == WRITE_FILE_TOOL.name:
         path = arguments.get("path")
         if not isinstance(path, str):
