@@ -12,28 +12,68 @@ from cagent.llm.base import (
     BASH_TOOL,
     SEARCH_AND_REPLACE_TOOL,
     WRITE_FILE_TOOL,
+    LLMClient,
     ToolCall,
     ToolDefinition,
 )
 from cagent.tracing import get_trace
 
+ADVISOR_TOOL = ToolDefinition(
+    name="advisor",
+    description=(
+        "Ask a smarter, more experienced coding advisor for concise guidance. "
+        "Use this when you are stuck, uncertain about an approach, or need help "
+        "debugging confusing code. Provide a prompt that describes the goal, "
+        "relevant context, what you tried, and the specific confusion point."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "prompt": {
+                "type": "string",
+                "description": (
+                    "Question and context for the coding advisor. Include the "
+                    "goal, current findings, attempted approach, and the exact "
+                    "point where guidance is needed."
+                ),
+            },
+        },
+        "required": ["prompt"],
+        "additionalProperties": False,
+    },
+)
+
+ADVISOR_TOOL_SYSTEM_PROMPT = (
+    "You are a senior coding advisor for another software engineering agent.\n"
+    "Your job is to help when the agent is stuck, uncertain, or needs a second "
+    "opinion on implementation or debugging.\n"
+    "Be brief and concise. Prefer direct guidance, key risks, and the next "
+    "useful action. Do not write long responses, large code blocks, or full "
+    "implementations unless absolutely necessary."
+)
+
 BUILTIN_TOOLS: tuple[ToolDefinition, ...] = (
     BASH_TOOL,
+    ADVISOR_TOOL,
     WRITE_FILE_TOOL,
     SEARCH_AND_REPLACE_TOOL,
 )
-PLAN_TOOLS: tuple[ToolDefinition, ...] = (BASH_TOOL,)
+PLAN_TOOLS: tuple[ToolDefinition, ...] = (BASH_TOOL, ADVISOR_TOOL)
 IMPLEMENTATION_TOOLS: tuple[ToolDefinition, ...] = (
     BASH_TOOL,
+    ADVISOR_TOOL,
     WRITE_FILE_TOOL,
     SEARCH_AND_REPLACE_TOOL,
 )
 __all__ = [
+    "ADVISOR_TOOL",
+    "ADVISOR_TOOL_SYSTEM_PROMPT",
     "BUILTIN_TOOLS",
     "PLAN_TOOLS",
     "IMPLEMENTATION_TOOLS",
     "AdvisorInput",
     "ToolResult",
+    "advisor",
     "bash",
     "run_tool",
     "run_tool_call",
@@ -60,7 +100,31 @@ class ToolResult:
     output: str
     advisor_input: AdvisorInput | None = None
 
-    def with_advice(self, advice: str | None) -> "ToolResult":
+    def __str__(self) -> str:
+        """Return the user-visible tool output."""
+
+        return self.output
+
+    def __contains__(self, item: object) -> bool:
+        """Support substring checks against the tool output."""
+
+        if not isinstance(item, str):
+            return False
+        return item in self.output
+
+    def __eq__(self, other: object) -> bool:
+        """Compare directly with strings for compatibility."""
+
+        if isinstance(other, str):
+            return self.output == other
+        if isinstance(other, ToolResult):
+            return (
+                self.output == other.output
+                and self.advisor_input == other.advisor_input
+            )
+        return NotImplemented
+
+    def with_advice(self, advice: str | None) -> ToolResult:
         """Return a new ToolResult with an advisor note prepended to output."""
 
         if not advice:
@@ -171,6 +235,31 @@ def search_and_replace(
     updated_content = content.replace(old_text, new_text, 1)
     file_path.write_text(updated_content, encoding=encoding)
     return f"Replaced 1 occurrence in {path}"
+
+
+def advisor(prompt: str, client: LLMClient | None) -> ToolResult:
+    """Ask the SMART_API advisor client for concise coding guidance."""
+
+    if not prompt.strip():
+        msg = "prompt must not be empty."
+        raise ValueError(msg)
+    if client is None:
+        return ToolResult(
+            output=(
+                "Advisor unavailable: SMART_API is not configured. Configure "
+                "SMART_API_TYPE/HOST/TOKEN/MODEL to use the advisor tool."
+            )
+        )
+
+    with get_trace().span("advisor_tool.request", {"prompt": prompt}) as span:
+        response = client.complete(
+            prompt,
+            system_prompt=ADVISOR_TOOL_SYSTEM_PROMPT,
+        )
+        content = (response.content or "").strip()
+        output = content or "Advisor returned no guidance."
+        span.set_attribute("response", output)
+        return ToolResult(output=output)
 
 
 def _normalize_line_replacement(content: str, *, has_following_lines: bool) -> str:
@@ -287,7 +376,12 @@ def _format_bash_output(
     return result
 
 
-def run_tool(name: str, arguments: Mapping[str, Any]) -> ToolResult:
+def run_tool(
+    name: str,
+    arguments: Mapping[str, Any],
+    *,
+    advisor_client: LLMClient | None = None,
+) -> ToolResult:
     """Run a built-in tool by name with provider-decoded arguments."""
 
     with get_trace().span(
@@ -297,14 +391,19 @@ def run_tool(name: str, arguments: Mapping[str, Any]) -> ToolResult:
             "arguments": arguments,
         },
     ) as span:
-        result = _run_tool(name, arguments)
+        result = _run_tool(name, arguments, advisor_client=advisor_client)
         span.set_attribute("result", result.output)
         if result.advisor_input is not None:
             span.set_attribute("advisor_requested", True)
         return result
 
 
-def _run_tool(name: str, arguments: Mapping[str, Any]) -> ToolResult:
+def _run_tool(
+    name: str,
+    arguments: Mapping[str, Any],
+    *,
+    advisor_client: LLMClient | None = None,
+) -> ToolResult:
     """Run a built-in tool without adding a trace span."""
 
     if name == BASH_TOOL.name:
@@ -321,6 +420,12 @@ def _run_tool(name: str, arguments: Mapping[str, Any]) -> ToolResult:
             cwd=cwd,
             timeout_seconds=_optional_int(arguments, "timeout_seconds"),
         )
+    if name == ADVISOR_TOOL.name:
+        prompt = arguments.get("prompt")
+        if not isinstance(prompt, str):
+            msg = "prompt must be a string."
+            raise TypeError(msg)
+        return advisor(prompt, advisor_client)
     if name == SEARCH_AND_REPLACE_TOOL.name:
         path = arguments.get("path")
         if not isinstance(path, str):
@@ -335,7 +440,6 @@ def _run_tool(name: str, arguments: Mapping[str, Any]) -> ToolResult:
             msg = "new_text must be a string."
             raise TypeError(msg)
         output = search_and_replace(path, old_text, new_text)
-        input("SEARCH_AND_REPLACE breakpoint - press Enter to continue...")
         return ToolResult(output=output)
     if name == WRITE_FILE_TOOL.name:
         path = arguments.get("path")
@@ -357,14 +461,17 @@ def _run_tool(name: str, arguments: Mapping[str, Any]) -> ToolResult:
             start_line=_optional_int(arguments, "start_line"),
             end_line=_optional_int(arguments, "end_line"),
         )
-        input("WRITE_FILE breakpoint - press Enter to continue...")
         return ToolResult(output=output)
 
     msg = f"Unknown tool: {name}"
     raise ValueError(msg)
 
 
-def run_tool_call(tool_call: ToolCall) -> ToolResult:
+def run_tool_call(
+    tool_call: ToolCall,
+    *,
+    advisor_client: LLMClient | None = None,
+) -> ToolResult:
     """Run a provider-neutral built-in tool call."""
 
     with get_trace().span(
@@ -376,6 +483,10 @@ def run_tool_call(tool_call: ToolCall) -> ToolResult:
             "arguments": tool_call.arguments,
         },
     ) as span:
-        result = run_tool(tool_call.name, tool_call.arguments)
+        result = run_tool(
+            tool_call.name,
+            tool_call.arguments,
+            advisor_client=advisor_client,
+        )
         span.set_attribute("result", result.output)
         return result

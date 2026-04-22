@@ -4,17 +4,38 @@ from pathlib import Path
 
 import pytest
 
-from cagent.llm import BASH_TOOL, WRITE_FILE_TOOL, ToolCall
+from cagent.llm import (
+    BASH_TOOL,
+    WRITE_FILE_TOOL,
+    LLMClient,
+    LLMRequest,
+    LLMResponse,
+    ToolCall,
+)
 from cagent.tools import (
+    ADVISOR_TOOL,
     BUILTIN_TOOLS,
     IMPLEMENTATION_TOOLS,
     PLAN_TOOLS,
     _format_bash_output,
+    advisor,
     bash,
     run_tool,
     run_tool_call,
     write_file,
 )
+
+
+class FakeLLMClient(LLMClient):
+    """Fake LLM client that records requests and returns one response."""
+
+    def __init__(self, response: LLMResponse) -> None:
+        self.response = response
+        self.requests: list[LLMRequest] = []
+
+    def _complete(self, request: LLMRequest) -> LLMResponse:
+        self.requests.append(request)
+        return self.response
 
 
 def test_bash_returns_exit_code_stdout_and_stderr() -> None:
@@ -183,18 +204,51 @@ def test_run_tool_call_write_file(tmp_path: Path) -> None:
     assert file_path.read_text(encoding="utf-8") == "tool call"
 
 
+def test_advisor_uses_client_with_prompt() -> None:
+    client = FakeLLMClient(LLMResponse(content="Check the import path."))
+
+    result = advisor("I am stuck on an import error.", client)
+
+    assert result == "Check the import path."
+    assert client.requests[0].user_prompt == "I am stuck on an import error."
+    assert client.requests[0].system_prompt
+
+
+def test_run_tool_dispatches_advisor_with_smart_client() -> None:
+    client = FakeLLMClient(LLMResponse(content="Use the local helper."))
+
+    result = run_tool(
+        "advisor",
+        {"prompt": "What should I do next?"},
+        advisor_client=client,
+    )
+
+    assert result == "Use the local helper."
+    assert client.requests[0].user_prompt == "What should I do next?"
+
+
+def test_advisor_reports_unavailable_without_client() -> None:
+    result = advisor("Need help.", None)
+
+    assert "SMART_API is not configured" in result
+
+
 def test_bash_tool_is_registered() -> None:
     assert BASH_TOOL in BUILTIN_TOOLS
+    assert ADVISOR_TOOL in BUILTIN_TOOLS
     assert WRITE_FILE_TOOL in BUILTIN_TOOLS
     assert BASH_TOOL.parameters["required"] == ["command"]
+    assert ADVISOR_TOOL.parameters["required"] == ["prompt"]
     assert WRITE_FILE_TOOL.parameters["required"] == ["path", "content"]
 
 
 def test_plan_tools_excludes_write_file() -> None:
     assert BASH_TOOL in PLAN_TOOLS
+    assert ADVISOR_TOOL in PLAN_TOOLS
     assert WRITE_FILE_TOOL not in PLAN_TOOLS
 
 
 def test_implementation_tools_includes_write_file() -> None:
     assert BASH_TOOL in IMPLEMENTATION_TOOLS
+    assert ADVISOR_TOOL in IMPLEMENTATION_TOOLS
     assert WRITE_FILE_TOOL in IMPLEMENTATION_TOOLS

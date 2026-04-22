@@ -43,7 +43,10 @@ def test_run_implementation_mode_prints_final_content(
 
     client = FakeLLMClient([LLMResponse(content="All done.")])
 
-    with patch("cagent.main.create_fast_api_client", return_value=client):
+    with (
+        patch("cagent.main.create_fast_api_client", return_value=client),
+        patch("cagent.main.create_smart_api_client", return_value=None),
+    ):
         run_implementation_mode(str(prompt_file))
 
     captured = capsys.readouterr()
@@ -76,7 +79,10 @@ def test_run_implementation_mode_calls_tools_and_loops(
     ]
     client = FakeLLMClient(responses)
 
-    with patch("cagent.main.create_fast_api_client", return_value=client):
+    with (
+        patch("cagent.main.create_fast_api_client", return_value=client),
+        patch("cagent.main.create_smart_api_client", return_value=None),
+    ):
         run_implementation_mode(str(prompt_file))
 
     captured = capsys.readouterr()
@@ -88,6 +94,47 @@ def test_run_implementation_mode_calls_tools_and_loops(
     second_request = client.requests[1]
     roles = [msg.role for msg in second_request.all_messages()]
     assert "tool" in roles
+
+
+def test_run_implementation_mode_passes_advisor_tool_to_smart_api(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    prompt_file = tmp_path / "prompt.md"
+    prompt_file.write_text("Implement something difficult.", encoding="utf-8")
+
+    fast_client = FakeLLMClient(
+        [
+            LLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="call_1",
+                        name="advisor",
+                        arguments={"prompt": "How should I approach this?"},
+                    )
+                ],
+            ),
+            LLMResponse(content="Used advisor guidance."),
+        ]
+    )
+    smart_client = FakeLLMClient([LLMResponse(content="Prefer the existing helper.")])
+
+    with (
+        patch("cagent.main.create_fast_api_client", return_value=fast_client),
+        patch("cagent.main.create_smart_api_client", return_value=smart_client),
+    ):
+        run_implementation_mode(str(prompt_file))
+
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "Used advisor guidance."
+    assert smart_client.requests[0].user_prompt == "How should I approach this?"
+    assert smart_client.requests[0].system_prompt
+
+    second_request = fast_client.requests[1]
+    tool_messages = [
+        message for message in second_request.all_messages() if message.role == "tool"
+    ]
+    assert tool_messages[0].content == "Prefer the existing helper."
 
 
 def test_run_implementation_mode_exits_when_no_client_configured(
@@ -127,6 +174,8 @@ def test_run_implementation_mode_exits_on_max_iterations(tmp_path: Path) -> None
 
     with (
         patch("cagent.main.create_fast_api_client", return_value=client),
+        patch("cagent.main.create_smart_api_client", return_value=None),
+        patch("cagent.main.precheck_tool_call", return_value=None),
         pytest.raises(SystemExit) as exc_info,
     ):
         run_implementation_mode(str(prompt_file))
@@ -229,7 +278,10 @@ def test_run_plan_mode_saves_plan(
     original_cwd = os.getcwd()
     os.chdir(tmp_path)
     try:
-        with patch("cagent.main.create_fast_api_client", return_value=client):
+        with (
+            patch("cagent.main.create_fast_api_client", return_value=client),
+            patch("cagent.main.create_smart_api_client", return_value=None),
+        ):
             run_plan_mode(str(task_file))
     finally:
         os.chdir(original_cwd)
@@ -270,7 +322,11 @@ def test_run_plan_mode_calls_tools_and_loops(
     original_cwd = os.getcwd()
     os.chdir(tmp_path)
     try:
-        with patch("cagent.main.create_fast_api_client", return_value=client):
+        with (
+            patch("cagent.main.create_fast_api_client", return_value=client),
+            patch("cagent.main.create_smart_api_client", return_value=None),
+            patch("cagent.main.precheck_tool_call", return_value=None),
+        ):
             run_plan_mode(str(task_file))
     finally:
         os.chdir(original_cwd)
@@ -319,6 +375,8 @@ def test_run_plan_mode_exits_on_max_iterations(
     try:
         with (
             patch("cagent.main.create_fast_api_client", return_value=client),
+            patch("cagent.main.create_smart_api_client", return_value=None),
+            patch("cagent.main.precheck_tool_call", return_value=None),
             pytest.raises(SystemExit) as exc_info,
         ):
             run_plan_mode(str(task_file))

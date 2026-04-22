@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -111,6 +110,7 @@ def run_plan_mode(file_path: str) -> None:
     if fast_client is None:
         print("Error: FAST_API_HOST is not configured.", file=sys.stderr)
         sys.exit(1)
+    smart_client = create_smart_api_client()
 
     task_content = Path(file_path).read_text(encoding="utf-8")
     plan_template = Path("prompts/plan.md").read_text(encoding="utf-8")
@@ -147,7 +147,10 @@ def run_plan_mode(file_path: str) -> None:
                     if blocked is not None:
                         tool_result = blocked
                     else:
-                        tool_result = run_tool_call(tool_call)
+                        tool_result = run_tool_call(
+                            tool_call,
+                            advisor_client=smart_client,
+                        )
                         tool_result = apply_advisor(tool_result, fast_client)
                     content = tool_result.output
                 except Exception as exc:
@@ -183,6 +186,7 @@ def run_implementation_mode(file_path: str) -> None:
     if fast_client is None:
         print("Error: FAST_API_HOST is not configured.", file=sys.stderr)
         sys.exit(1)
+    smart_client = create_smart_api_client()
 
     task_content = Path(file_path).read_text(encoding="utf-8")
 
@@ -228,7 +232,10 @@ def run_implementation_mode(file_path: str) -> None:
                     if blocked is not None:
                         tool_result = blocked
                     else:
-                        tool_result = run_tool_call(tool_call)
+                        tool_result = run_tool_call(
+                            tool_call,
+                            advisor_client=smart_client,
+                        )
                         tool_result = apply_advisor(tool_result, fast_client)
                     content = tool_result.output
                 except Exception as exc:
