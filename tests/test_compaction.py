@@ -118,6 +118,66 @@ def test_does_not_refold_existing_tombstone() -> None:
     assert once == twice
 
 
+def test_folds_fuzzy_match_on_bash_command() -> None:
+    big_a = "A" * 5000
+    big_b = "B" * 5000
+    # Two bash calls against near-identical targets; ratio should clear 0.85.
+    messages = [
+        LLMMessage(role="system", content="sys"),
+        LLMMessage(role="user", content="hi"),
+        *_pair(0, "bash", {"command": "cat   /app/cagent/main.py"}, big_a),
+        *_pair(1, "bash", {"command": "cat /app/cagent/main.py"}, big_b),
+    ]
+    result = compact_history(
+        messages,
+        keep_recent=1,
+        min_savings_bytes=100,
+        budget_bytes=1000,
+        similarity_threshold=0.85,
+    )
+    assert result[3].content.startswith(TOMBSTONE_PREFIX)
+    assert result[-1].content == big_b
+
+
+def test_does_not_fold_dissimilar_commands() -> None:
+    big = "C" * 5000
+    messages = [
+        LLMMessage(role="system", content="sys"),
+        LLMMessage(role="user", content="hi"),
+        *_pair(0, "bash", {"command": "ls /app"}, big),
+        *_pair(1, "bash", {"command": "find / -name '*.py' | head"}, big),
+    ]
+    result = compact_history(
+        messages,
+        keep_recent=1,
+        min_savings_bytes=100,
+        budget_bytes=1000,
+        similarity_threshold=0.85,
+    )
+    # Commands are too different — neither should be folded.
+    assert result[3].content == big
+    assert result[-1].content == big
+
+
+def test_does_not_fold_across_different_tool_names() -> None:
+    big = "D" * 5000
+    messages = [
+        LLMMessage(role="system", content="sys"),
+        LLMMessage(role="user", content="hi"),
+        *_pair(0, "bash", {"command": "cat a.py"}, big),
+        *_pair(1, "write_file", {"path": "a.py", "content": "x"}, big),
+    ]
+    result = compact_history(
+        messages,
+        keep_recent=1,
+        min_savings_bytes=100,
+        budget_bytes=1000,
+        similarity_threshold=0.5,
+    )
+    assert result[3].content == big
+    assert result[-1].content == big
+
+
 def test_emits_trace_span() -> None:
     trace = Trace()
     token = set_trace(trace)

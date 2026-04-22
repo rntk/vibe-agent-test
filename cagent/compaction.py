@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
+from difflib import SequenceMatcher
 
 from cagent.llm import LLMMessage, ToolCall
 from cagent.tracing import get_trace
@@ -11,8 +13,11 @@ from cagent.tracing import get_trace
 DEFAULT_KEEP_RECENT = 8
 DEFAULT_MIN_SAVINGS_BYTES = 2048
 DEFAULT_BUDGET_BYTES = 32_000
+DEFAULT_SIMILARITY_THRESHOLD = 0.85
 
 TOMBSTONE_PREFIX = "[compacted:"
+
+_WHITESPACE_RE = re.compile(r"\s+")
 
 
 def compact_history(
@@ -21,14 +26,16 @@ def compact_history(
     keep_recent: int = DEFAULT_KEEP_RECENT,
     min_savings_bytes: int = DEFAULT_MIN_SAVINGS_BYTES,
     budget_bytes: int = DEFAULT_BUDGET_BYTES,
+    similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
 ) -> tuple[LLMMessage, ...]:
     """Return history with stale duplicate tool results replaced by tombstones.
 
     Preserves the system prompt, the first user message, every assistant message,
-    and the last ``keep_recent`` tool-result messages. Older tool results whose
-    ``(tool_name, arguments)`` have been repeated later in the conversation are
-    replaced by a short tombstone, but only when the saving per message exceeds
-    ``min_savings_bytes`` and the total history exceeds ``budget_bytes``.
+    and the last ``keep_recent`` tool-result messages. An older tool result is
+    folded when a later pair uses the same tool name and an argument signature
+    whose ``difflib.SequenceMatcher.ratio()`` is at least
+    ``similarity_threshold``. Folding only happens when the per-message saving
+    exceeds ``min_savings_bytes`` and the total history exceeds ``budget_bytes``.
     """
 
     original = tuple(messages)
@@ -42,6 +49,7 @@ def compact_history(
             "keep_recent": keep_recent,
             "min_savings_bytes": min_savings_bytes,
             "budget_bytes": budget_bytes,
+            "similarity_threshold": similarity_threshold,
             "before": stats_before,
         },
     ) as span:
@@ -50,18 +58,19 @@ def compact_history(
             return original
 
         protected_ids = _protected_tool_call_ids(pairs_before, keep_recent)
-        newest_by_key = _newest_pair_by_key(pairs_before)
         pairs = pairs_before
+        signatures = [_arg_signature(p.call) for p in pairs]
 
         folds: list[_Fold] = []
-        for pair in pairs:
+        for i, pair in enumerate(pairs):
             if pair.call.id in protected_ids:
                 continue
             if _is_tombstone(pair.result.content):
                 continue
-            key = _pair_key(pair.call)
-            newest = newest_by_key.get(key)
-            if newest is None or newest.index <= pair.index:
+            superseder = _find_superseder(
+                i, pairs, signatures, similarity_threshold
+            )
+            if superseder is None:
                 continue
             savings = len(pair.result.content or "") - _tombstone_size(pair.call)
             if savings < min_savings_bytes:
@@ -70,7 +79,9 @@ def compact_history(
                 _Fold(
                     index=pair.index,
                     call=pair.call,
-                    superseded_by_index=newest.index,
+                    superseded_by_index=superseder.pair.index,
+                    similarity=superseder.similarity,
+                    match_mode=superseder.match_mode,
                 )
             )
 
@@ -109,6 +120,8 @@ def compact_history(
                     "tool_call_id": fold.call.id,
                     "tool_name": fold.call.name,
                     "superseded_by_index": fold.superseded_by_index,
+                    "match_mode": fold.match_mode,
+                    "similarity": round(fold.similarity, 3),
                     "bytes_before": len(
                         original[fold.index].content or ""
                     ),
@@ -148,17 +161,36 @@ class _Pair:
 
 
 class _Fold:
-    __slots__ = ("index", "call", "superseded_by_index")
+    __slots__ = (
+        "index",
+        "call",
+        "superseded_by_index",
+        "similarity",
+        "match_mode",
+    )
 
     def __init__(
         self,
         index: int,
         call: ToolCall,
         superseded_by_index: int,
+        similarity: float,
+        match_mode: str,
     ) -> None:
         self.index = index
         self.call = call
         self.superseded_by_index = superseded_by_index
+        self.similarity = similarity
+        self.match_mode = match_mode
+
+
+class _Superseder:
+    __slots__ = ("pair", "similarity", "match_mode")
+
+    def __init__(self, pair: _Pair, similarity: float, match_mode: str) -> None:
+        self.pair = pair
+        self.similarity = similarity
+        self.match_mode = match_mode
 
 
 def _tool_result_pairs(messages: Sequence[LLMMessage]) -> list[_Pair]:
@@ -188,23 +220,51 @@ def _protected_tool_call_ids(pairs: Sequence[_Pair], keep_recent: int) -> set[st
     return protected
 
 
-def _newest_pair_by_key(pairs: Sequence[_Pair]) -> dict[str, _Pair]:
-    newest: dict[str, _Pair] = {}
-    for pair in pairs:
-        key = _pair_key(pair.call)
-        existing = newest.get(key)
-        if existing is None or pair.index > existing.index:
-            newest[key] = pair
-    return newest
+def _find_superseder(
+    i: int,
+    pairs: Sequence[_Pair],
+    signatures: Sequence[str],
+    threshold: float,
+) -> _Superseder | None:
+    """Return the latest later pair that matches pairs[i] above the threshold."""
+
+    pair = pairs[i]
+    sig = signatures[i]
+    best: _Superseder | None = None
+    for j in range(i + 1, len(pairs)):
+        other = pairs[j]
+        if other.call.name != pair.call.name:
+            continue
+        other_sig = signatures[j]
+        if sig == other_sig:
+            similarity = 1.0
+            mode = "exact"
+        else:
+            similarity = SequenceMatcher(None, sig, other_sig).ratio()
+            if similarity < threshold:
+                continue
+            mode = "fuzzy"
+        # Prefer the latest match so the tombstone points at the freshest data.
+        if best is None or other.index > best.pair.index:
+            best = _Superseder(pair=other, similarity=similarity, match_mode=mode)
+    return best
 
 
-def _pair_key(call: ToolCall) -> str:
-    canonical_args = json.dumps(
-        _jsonable(call.arguments),
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return f"{call.name}\x00{canonical_args}"
+def _arg_signature(call: ToolCall) -> str:
+    """Return a normalized argument string for similarity comparison."""
+
+    normalized = _normalize_args(_jsonable(call.arguments))
+    return json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+
+
+def _normalize_args(value: object) -> object:
+    if isinstance(value, dict):
+        return {str(k): _normalize_args(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_normalize_args(v) for v in value]
+    if isinstance(value, str):
+        return _WHITESPACE_RE.sub(" ", value.strip())
+    return value
 
 
 def _jsonable(value: object) -> object:
@@ -224,7 +284,7 @@ def _is_tombstone(content: str | None) -> bool:
 def _tombstone_text(call: ToolCall, superseded_by_index: int) -> str:
     return (
         f"{TOMBSTONE_PREFIX} tool={call.name} output hidden; "
-        f"superseded by a newer call with identical arguments later in this "
+        f"superseded by a newer call with similar arguments later in this "
         f"conversation (message #{superseded_by_index}).]"
     )
 
@@ -301,6 +361,7 @@ __all__ = [
     "DEFAULT_BUDGET_BYTES",
     "DEFAULT_KEEP_RECENT",
     "DEFAULT_MIN_SAVINGS_BYTES",
+    "DEFAULT_SIMILARITY_THRESHOLD",
     "TOMBSTONE_PREFIX",
     "compact_history",
 ]
