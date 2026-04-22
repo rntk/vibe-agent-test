@@ -12,16 +12,21 @@ class ProviderConfig:
 
     host: str | None = None
     token: str | None = None
+    type: str | None = None
+    model: str | None = None
 
 
 def load_provider_config(prefix: str) -> ProviderConfig:
     """Load provider configuration from environment variables.
 
-    Reads ``{PREFIX}_HOST`` and ``{PREFIX}_TOKEN``.
+    Reads ``{PREFIX}_HOST``, ``{PREFIX}_TOKEN``, ``{PREFIX}_TYPE``, and
+    ``{PREFIX}_MODEL``.
     """
     return ProviderConfig(
         host=os.getenv(f"{prefix}_HOST") or None,
         token=os.getenv(f"{prefix}_TOKEN") or None,
+        type=os.getenv(f"{prefix}_TYPE") or None,
+        model=os.getenv(f"{prefix}_MODEL") or None,
     )
 
 

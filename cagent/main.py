@@ -10,9 +10,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from cagent.advisor import apply_advisor, precheck_tool_call
-from cagent.config import load_fast_api_config, load_smart_api_config
+from cagent.config import ProviderConfig, load_fast_api_config, load_smart_api_config
 from cagent.llm import LLMClient, LLMMessage, LLMRequest, LLMResponse, ToolCall
+from cagent.llm.anthropic import AnthropicClient
 from cagent.llm.llamacpp import LLamaCPP
+from cagent.llm.openai import OpenAIChatCompletionsClient
 from cagent.tools import IMPLEMENTATION_TOOLS, PLAN_TOOLS, run_tool_call
 from cagent.tracing import Trace, reset_trace, set_trace, write_trace_html
 
@@ -29,7 +31,7 @@ def create_fast_api_client() -> LLMClient | None:
     config = load_fast_api_config()
     if not config.host:
         return None
-    return LLamaCPP(host=config.host, token=config.token)
+    return _create_client_from_config(config)
 
 
 def create_smart_api_client() -> LLMClient | None:
@@ -37,7 +39,55 @@ def create_smart_api_client() -> LLMClient | None:
     config = load_smart_api_config()
     if not config.host:
         return None
-    return LLamaCPP(host=config.host, token=config.token)
+    return _create_client_from_config(config)
+
+
+def _create_client_from_config(config: ProviderConfig) -> LLMClient:
+    """Instantiate the correct LLM client based on provider configuration."""
+    provider_type = (config.type or "llamacpp").lower()
+
+    if provider_type == "llamacpp":
+        return LLamaCPP(
+            host=config.host,
+            token=config.token,
+            model=config.model or "moonshotai/Kimi-K2.5",
+        )
+
+    if provider_type == "openai":
+        try:
+            import openai as openai_sdk
+        except ImportError as exc:
+            raise ImportError(
+                "The 'openai' package is required for TYPE=openai. "
+                "Install it with: pip install openai"
+            ) from exc
+        client = openai_sdk.OpenAI(
+            base_url=config.host,
+            api_key=config.token or "no-token",
+        )
+        return OpenAIChatCompletionsClient(
+            client=client,
+            default_model=config.model or "gpt-4o",
+        )
+
+    if provider_type == "anthropic":
+        try:
+            import anthropic as anthropic_sdk
+        except ImportError as exc:
+            raise ImportError(
+                "The 'anthropic' package is required for TYPE=anthropic. "
+                "Install it with: pip install anthropic"
+            ) from exc
+        client = anthropic_sdk.Anthropic(
+            base_url=config.host,
+            api_key=config.token or "no-token",
+        )
+        return AnthropicClient(
+            client=client,
+            model=config.model or "claude-3-5-sonnet-20241022",
+        )
+
+    raise ValueError(f"Unsupported LLM provider type: {config.type}")
 
 
 def run_plan_mode(file_path: str) -> None:
