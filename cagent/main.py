@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
-from cagent.advisor import apply_advisor
+from cagent.advisor import apply_advisor, precheck_tool_call
 from cagent.config import load_fast_api_config, load_smart_api_config
 from cagent.llm import LLMClient, LLMMessage, LLMRequest, LLMResponse, ToolCall
 from cagent.llm.llamacpp import LLamaCPP
@@ -78,8 +78,12 @@ def run_plan_mode(file_path: str) -> None:
             )
             for tool_call in tool_calls:
                 try:
-                    tool_result = run_tool_call(tool_call)
-                    tool_result = apply_advisor(tool_result, fast_client)
+                    blocked = precheck_tool_call(tool_call, fast_client)
+                    if blocked is not None:
+                        tool_result = blocked
+                    else:
+                        tool_result = run_tool_call(tool_call)
+                        tool_result = apply_advisor(tool_result, fast_client)
                     content = tool_result.output
                 except Exception as exc:
                     content = f"Error: {exc}"
@@ -153,8 +157,12 @@ def run_implementation_mode(file_path: str) -> None:
             )
             for tool_call in tool_calls:
                 try:
-                    tool_result = run_tool_call(tool_call)
-                    tool_result = apply_advisor(tool_result, fast_client)
+                    blocked = precheck_tool_call(tool_call, fast_client)
+                    if blocked is not None:
+                        tool_result = blocked
+                    else:
+                        tool_result = run_tool_call(tool_call)
+                        tool_result = apply_advisor(tool_result, fast_client)
                     content = tool_result.output
                 except Exception as exc:
                     content = f"Error: {exc}"
