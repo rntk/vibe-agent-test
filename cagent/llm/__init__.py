@@ -2,7 +2,6 @@
 
 from cagent.llm.base import (
     BASH_TOOL,
-    READ_FILE_TOOL,
     SEARCH_AND_REPLACE_TOOL,
     WRITE_FILE_TOOL,
     LLMClient,
@@ -21,7 +20,6 @@ __all__ = [
     "LLMResponse",
     "MessageRole",
     "BASH_TOOL",
-    "READ_FILE_TOOL",
     "SEARCH_AND_REPLACE_TOOL",
     "WRITE_FILE_TOOL",
     "ToolCall",

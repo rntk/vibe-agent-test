@@ -21,38 +21,6 @@ class ToolDefinition:
     parameters: Mapping[str, Any] = field(default_factory=dict)
 
 
-READ_FILE_TOOL = ToolDefinition(
-    name="read_file",
-    description=(
-        "Read a text file from disk. Optionally pass 1-based inclusive line "
-        "range parameters to read only part of the file. Results include "
-        "1-based line number prefixes inside a file XML-like tag. These "
-        "prefixes are metadata and are not part of the original file content."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "path": {
-                "type": "string",
-                "description": "Path to the text file to read.",
-            },
-            "start_line": {
-                "type": "integer",
-                "minimum": 1,
-                "description": "Optional 1-based first line to read.",
-            },
-            "end_line": {
-                "type": "integer",
-                "minimum": 1,
-                "description": "Optional 1-based last line to read, inclusive.",
-            },
-        },
-        "required": ["path"],
-        "additionalProperties": False,
-    },
-)
-
-
 BASH_TOOL = ToolDefinition(
     name="bash",
     description=(
@@ -117,11 +85,11 @@ WRITE_FILE_TOOL = ToolDefinition(
         "Use this tool to create, overwrite, or surgically update a text file. "
         "You can replace the entire file, append to it, or replace a specific "
         "1-based inclusive line range by providing start_line and/or end_line. "
-        "This is the preferred way to edit files. To make a small change, read "
-        "the file with read_file first, note the line numbers you want to change, "
-        "then call write_file with start_line and end_line set to those numbers "
-        "and content set to the replacement text. Creates parent directories for "
-        "new files."
+        "This is the preferred way to edit files. To make a small change, use "
+        "bash to read the file with cat -n first, note the line numbers you want "
+        "to change, then call write_file with start_line and end_line set to "
+        "those numbers and content set to the replacement text. Creates parent "
+        "directories for new files."
     ),
     parameters={
         "type": "object",

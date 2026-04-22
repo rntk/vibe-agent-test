@@ -112,8 +112,8 @@ def test_run_implementation_mode_exits_on_max_iterations(tmp_path: Path) -> None
             tool_calls=[
                 ToolCall(
                     id=f"call_{i}",
-                    name="read_file",
-                    arguments={"path": str(prompt_file)},
+                    name="bash",
+                    arguments={"command": f"echo {i}"},
                 )
             ],
         )
@@ -227,8 +227,8 @@ def test_run_plan_mode_calls_tools_and_loops(
             tool_calls=[
                 ToolCall(
                     id="call_1",
-                    name="read_file",
-                    arguments={"path": str(task_file)},
+                    name="bash",
+                    arguments={"command": f"cat {task_file}"},
                 )
             ],
         ),
@@ -274,8 +274,8 @@ def test_run_plan_mode_exits_on_max_iterations(
             tool_calls=[
                 ToolCall(
                     id=f"call_{i}",
-                    name="read_file",
-                    arguments={"path": str(task_file)},
+                    name="bash",
+                    arguments={"command": f"echo {i}"},
                 )
             ],
         )

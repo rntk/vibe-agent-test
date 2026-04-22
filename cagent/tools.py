@@ -10,7 +10,6 @@ from typing import Any
 
 from cagent.llm.base import (
     BASH_TOOL,
-    READ_FILE_TOOL,
     SEARCH_AND_REPLACE_TOOL,
     WRITE_FILE_TOOL,
     ToolCall,
@@ -19,14 +18,12 @@ from cagent.llm.base import (
 from cagent.tracing import get_trace
 
 BUILTIN_TOOLS: tuple[ToolDefinition, ...] = (
-    READ_FILE_TOOL,
     BASH_TOOL,
     WRITE_FILE_TOOL,
     SEARCH_AND_REPLACE_TOOL,
 )
-PLAN_TOOLS: tuple[ToolDefinition, ...] = (READ_FILE_TOOL, BASH_TOOL)
+PLAN_TOOLS: tuple[ToolDefinition, ...] = (BASH_TOOL,)
 IMPLEMENTATION_TOOLS: tuple[ToolDefinition, ...] = (
-    READ_FILE_TOOL,
     BASH_TOOL,
     WRITE_FILE_TOOL,
     SEARCH_AND_REPLACE_TOOL,
@@ -36,7 +33,6 @@ __all__ = [
     "PLAN_TOOLS",
     "IMPLEMENTATION_TOOLS",
     "bash",
-    "read_file",
     "run_tool",
     "run_tool_call",
     "search_and_replace",
@@ -52,38 +48,6 @@ def _optional_int(arguments: Mapping[str, Any], key: str) -> int | None:
         msg = f"{key} must be an integer."
         raise TypeError(msg)
     return value
-
-
-def read_file(
-    path: str,
-    *,
-    start_line: int | None = None,
-    end_line: int | None = None,
-    encoding: str = "utf-8",
-) -> str:
-    """Read a text file or line range with line numbers in a file tag."""
-
-    if start_line is not None and start_line < 1:
-        msg = "start_line must be greater than or equal to 1."
-        raise ValueError(msg)
-    if end_line is not None and end_line < 1:
-        msg = "end_line must be greater than or equal to 1."
-        raise ValueError(msg)
-    if start_line is not None and end_line is not None and end_line < start_line:
-        msg = "end_line must be greater than or equal to start_line."
-        raise ValueError(msg)
-
-    file_path = Path(path)
-    if not file_path.is_file():
-        msg = f"File not found: {path}"
-        raise FileNotFoundError(msg)
-
-    content = file_path.read_text(encoding=encoding)
-    lines = content.splitlines(keepends=True)
-    start_index = 0 if start_line is None else start_line - 1
-    end_index = end_line if end_line is not None else len(lines)
-    selected_lines = lines[start_index:end_index]
-    return _format_file_content(path, selected_lines, start_line=start_index + 1)
 
 
 def write_file(
@@ -180,21 +144,6 @@ def search_and_replace(
     return f"Replaced 1 occurrence in {path}"
 
 
-def _format_file_content(
-    path: str,
-    lines: list[str],
-    *,
-    start_line: int,
-) -> str:
-    numbered_content = "".join(
-        f"{line_number}: {line}"
-        for line_number, line in enumerate(lines, start=start_line)
-    )
-    if numbered_content and not numbered_content.endswith("\n"):
-        numbered_content += "\n"
-    return f'<file name="{escape(path, quote=True)}" note="This file content was enriched with line numbers as a prefix">\n{numbered_content}</file>'
-
-
 def _normalize_line_replacement(content: str, *, has_following_lines: bool) -> str:
     if content and has_following_lines and not content.endswith(("\n", "\r")):
         return f"{content}\n"
@@ -274,16 +223,6 @@ def run_tool(name: str, arguments: Mapping[str, Any]) -> str:
 def _run_tool(name: str, arguments: Mapping[str, Any]) -> str:
     """Run a built-in tool without adding a trace span."""
 
-    if name == READ_FILE_TOOL.name:
-        path = arguments.get("path")
-        if not isinstance(path, str):
-            msg = "path must be a string."
-            raise TypeError(msg)
-        return read_file(
-            path,
-            start_line=_optional_int(arguments, "start_line"),
-            end_line=_optional_int(arguments, "end_line"),
-        )
     if name == BASH_TOOL.name:
         command = arguments.get("command")
         if not isinstance(command, str):
