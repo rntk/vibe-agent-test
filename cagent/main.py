@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -27,19 +28,27 @@ class EchoLLMClient(LLMClient):
 
 
 def create_fast_api_client() -> LLMClient | None:
-    """Create a FAST_API LLM client when ``FAST_API_HOST`` is set."""
+    """Create a FAST_API LLM client when provider configuration is set."""
     config = load_fast_api_config()
-    if not config.host:
+    if not _has_usable_provider_config(config):
         return None
     return _create_client_from_config(config)
 
 
 def create_smart_api_client() -> LLMClient | None:
-    """Create a SMART_API LLM client when ``SMART_API_HOST`` is set."""
+    """Create a SMART_API LLM client when provider configuration is set."""
     config = load_smart_api_config()
-    if not config.host:
+    if not _has_usable_provider_config(config):
         return None
     return _create_client_from_config(config)
+
+
+def _has_usable_provider_config(config: ProviderConfig) -> bool:
+    """Return whether a provider config is sufficient to create a client."""
+    provider_type = (config.type or "llamacpp").lower()
+    if provider_type == "llamacpp":
+        return bool(config.host)
+    return bool(config.type)
 
 
 def _create_client_from_config(config: ProviderConfig) -> LLMClient:
@@ -47,6 +56,8 @@ def _create_client_from_config(config: ProviderConfig) -> LLMClient:
     provider_type = (config.type or "llamacpp").lower()
 
     if provider_type == "llamacpp":
+        if not config.host:
+            raise ValueError("HOST is required for TYPE=llamacpp.")
         return LLamaCPP(
             host=config.host,
             token=config.token,
@@ -61,10 +72,12 @@ def _create_client_from_config(config: ProviderConfig) -> LLMClient:
                 "The 'openai' package is required for TYPE=openai. "
                 "Install it with: pip install openai"
             ) from exc
-        client = openai_sdk.OpenAI(
-            base_url=config.host,
-            api_key=config.token or "no-token",
-        )
+        openai_kwargs: dict[str, str] = {}
+        if config.host:
+            openai_kwargs["base_url"] = config.host
+        if config.token:
+            openai_kwargs["api_key"] = config.token
+        client = openai_sdk.OpenAI(**openai_kwargs)
         return OpenAIChatCompletionsClient(
             client=client,
             default_model=config.model or "gpt-4o",
@@ -78,10 +91,12 @@ def _create_client_from_config(config: ProviderConfig) -> LLMClient:
                 "The 'anthropic' package is required for TYPE=anthropic. "
                 "Install it with: pip install anthropic"
             ) from exc
-        client = anthropic_sdk.Anthropic(
-            base_url=config.host,
-            api_key=config.token or "no-token",
-        )
+        anthropic_kwargs: dict[str, str] = {}
+        if config.host:
+            anthropic_kwargs["base_url"] = config.host
+        if config.token:
+            anthropic_kwargs["api_key"] = config.token
+        client = anthropic_sdk.Anthropic(**anthropic_kwargs)
         return AnthropicClient(
             client=client,
             model=config.model or "claude-3-5-sonnet-20241022",
@@ -174,8 +189,10 @@ def run_implementation_mode(file_path: str) -> None:
     system_prompt = (
         "You are a software engineering assistant. "
         "Use the available tools to research the current project. "
-        "If the users task already implemented in the codebase, find the relevant code, explain it to the user and finish. "
-        "Otherwise, research how to implement the users request using the available tools and information in the codebase. "
+        "If the users task already implemented in the codebase, find the "
+        "relevant code, explain it to the user and finish. "
+        "Otherwise, research how to implement the users request using the "
+        "available tools and information in the codebase. "
         "Current directory: /app"
     )
 

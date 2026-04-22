@@ -7,8 +7,12 @@ from unittest.mock import patch
 import pytest
 
 from cagent.llm import LLMClient, LLMRequest, LLMResponse, ToolCall
+from cagent.llm.anthropic import AnthropicClient
+from cagent.llm.openai import OpenAIChatCompletionsClient
 from cagent.main import (
     EchoLLMClient,
+    create_fast_api_client,
+    create_smart_api_client,
     main,
     run_implementation_mode,
     run_plan_mode,
@@ -135,6 +139,33 @@ def test_echo_llm_client_returns_user_prompt() -> None:
     client = EchoLLMClient()
     response = client.complete("hello")
     assert response.content == "hello"
+
+
+def test_create_fast_api_client_allows_openai_without_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FAST_API_TYPE", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.delenv("FAST_API_HOST", raising=False)
+    monkeypatch.delenv("FAST_API_TOKEN", raising=False)
+
+    client = create_fast_api_client()
+
+    assert isinstance(client, OpenAIChatCompletionsClient)
+    assert client.client.api_key == "test-openai-key"
+
+
+def test_create_smart_api_client_allows_anthropic_without_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SMART_API_TYPE", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+    monkeypatch.delenv("SMART_API_HOST", raising=False)
+    monkeypatch.delenv("SMART_API_TOKEN", raising=False)
+
+    client = create_smart_api_client()
+
+    assert isinstance(client, AnthropicClient)
 
 
 def test_main_writes_trace_to_non_empty_trace_path(
