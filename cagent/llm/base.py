@@ -164,6 +164,7 @@ class LLMRequest:
     tool_choice: str | dict[str, Any] | None = None
     parallel_tool_calls: bool | None = None
     output_schema: Mapping[str, Any] | None = None
+    reasoning_effort: str | None = None
 
     def all_messages(self) -> tuple[LLMMessage, ...]:
         """Return request messages with system and user prompts applied."""
@@ -206,6 +207,7 @@ class LLMClient(ABC):
         tool_choice: str | dict[str, Any] | None = None,
         parallel_tool_calls: bool | None = None,
         output_schema: Mapping[str, Any] | None = None,
+        reasoning_effort: str | None = None,
     ) -> LLMResponse:
         """Run one provider-neutral LLM turn."""
 
@@ -230,6 +232,7 @@ class LLMClient(ABC):
             tool_choice=tool_choice,
             parallel_tool_calls=parallel_tool_calls,
             output_schema=output_schema,
+            reasoning_effort=reasoning_effort,
         )
         all_msgs = request.all_messages()
         with get_trace().span(

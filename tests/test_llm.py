@@ -924,6 +924,32 @@ def test_openai_chat_completions_creates_trace_span() -> None:
     assert span.attributes["message_count"] == 2
 
 
+def test_openai_chat_completions_reasoning_in_trace() -> None:
+    trace = Trace()
+    token = set_trace(trace)
+    sdk_client = FakeOpenAIClient(
+        completion=_make_chat_completion(
+            content="answer",
+            reasoning_content="Thinking step by step.",
+        ),
+    )
+    client = OpenAIChatCompletionsClient(
+        client=sdk_client,
+        default_model="gpt-test",
+    )
+    try:
+        response = client.complete("Solve this.", reasoning_effort="high")
+    finally:
+        reset_trace(token)
+
+    assert response.reasoning == "Thinking step by step."
+    assert sdk_client.payload is not None
+    assert sdk_client.payload["reasoning_effort"] == "high"
+    assert len(trace.roots) == 1
+    span = trace.roots[0]
+    assert span.attributes["response_reasoning"] == "Thinking step by step."
+
+
 def test_openai_responses_creates_trace_span() -> None:
     trace = Trace()
     token = set_trace(trace)
@@ -951,3 +977,33 @@ def test_openai_responses_creates_trace_span() -> None:
     assert span.name == "llm.complete"
     assert span.attributes["request"]["user_prompt"] == "Trace me too."
     assert span.attributes["response_content"] == "traced response"
+
+
+def test_openai_responses_reasoning_in_trace() -> None:
+    trace = Trace()
+    token = set_trace(trace)
+    sdk_client = FakeOpenAIResponsesClient(
+        response=_make_response(
+            output=[
+                _make_responses_reasoning_item("Thinking..."),
+                _make_responses_output_message(
+                    content=[_make_responses_output_text("done")]
+                ),
+            ]
+        )
+    )
+    client = OpenAIResponsesClient(
+        client=sdk_client,
+        default_model="gpt-test",
+    )
+    try:
+        response = client.complete("Think.", reasoning_effort="medium")
+    finally:
+        reset_trace(token)
+
+    assert response.reasoning == "Thinking..."
+    assert sdk_client.payload is not None
+    assert sdk_client.payload["reasoning"] == {"effort": "medium"}
+    assert len(trace.roots) == 1
+    span = trace.roots[0]
+    assert span.attributes["response_reasoning"] == "Thinking..."

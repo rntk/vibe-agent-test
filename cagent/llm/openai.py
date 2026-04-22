@@ -78,6 +78,8 @@ class OpenAIChatCompletionsClient(LLMClient):
             payload["parallel_tool_calls"] = request.parallel_tool_calls
         if request.temperature is not None:
             payload["temperature"] = request.temperature
+        if request.reasoning_effort is not None:
+            payload["reasoning_effort"] = request.reasoning_effort
 
         completion = self.client.chat.completions.create(**payload)
         return self.from_provider_response(completion)
@@ -297,6 +299,8 @@ class OpenAIResponsesClient(LLMClient):
             kwargs["parallel_tool_calls"] = request.parallel_tool_calls
         if request.temperature is not None:
             kwargs["temperature"] = request.temperature
+        if request.reasoning_effort is not None:
+            kwargs["reasoning"] = {"effort": request.reasoning_effort}
 
         response = self.client.responses.create(**kwargs)
         return self.from_provider_response(response)

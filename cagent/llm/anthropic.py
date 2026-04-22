@@ -91,7 +91,10 @@ class AnthropicClient(LLMClient):
             span.set_attribute(
                 "response_model", AnthropicClient.get_value(response, "model")
             )
-            return AnthropicClient.from_provider_response(response)
+            result = AnthropicClient.from_provider_response(response)
+            if result.reasoning is not None:
+                span.set_attribute("response_reasoning", result.reasoning)
+            return result
 
     @staticmethod
     def to_provider_message(message: LLMMessage) -> MessageParam:
@@ -155,12 +158,17 @@ class AnthropicClient(LLMClient):
         """Convert an Anthropic response to a neutral response."""
 
         content_parts: list[str] = []
+        reasoning_parts: list[str] = []
         tool_calls: list[ToolCall] = []
 
         blocks = AnthropicClient.get_value(response, "content", ())
         for block in blocks:
             block_type = AnthropicClient.get_value(block, "type")
-            if block_type == "text":
+            if block_type == "thinking":
+                thinking = AnthropicClient.get_value(block, "thinking")
+                if thinking:
+                    reasoning_parts.append(cast(str, thinking))
+            elif block_type == "text":
                 text = AnthropicClient.get_value(block, "text")
                 if text:
                     content_parts.append(cast(str, text))
@@ -180,6 +188,7 @@ class AnthropicClient(LLMClient):
 
         return LLMResponse(
             content="\n".join(content_parts) if content_parts else None,
+            reasoning="\n\n".join(reasoning_parts) if reasoning_parts else None,
             tool_calls=tuple(tool_calls),
             raw=response,
         )
