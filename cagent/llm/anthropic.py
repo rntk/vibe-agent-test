@@ -26,6 +26,7 @@ from cagent.llm.base import (
     ToolCall,
     ToolDefinition,
 )
+from cagent.tracing import get_trace
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,8 +73,25 @@ class AnthropicClient(LLMClient):
                 request.output_schema
             )
 
-        response = self.client.messages.create(**kwargs)
-        return AnthropicClient.from_provider_response(response)
+        with get_trace().span(
+            "llm.anthropic.complete",
+            {
+                "model": kwargs["model"],
+                "max_tokens": self.max_tokens,
+                "tool_count": len(request.tools),
+            },
+        ) as span:
+            response = self.client.messages.create(**kwargs)
+            usage = AnthropicClient.get_value(response, "usage")
+            if usage is not None:
+                span.set_attribute("usage", usage)
+            stop_reason = AnthropicClient.get_value(response, "stop_reason")
+            if stop_reason is not None:
+                span.set_attribute("stop_reason", stop_reason)
+            span.set_attribute(
+                "response_model", AnthropicClient.get_value(response, "model")
+            )
+            return AnthropicClient.from_provider_response(response)
 
     @staticmethod
     def to_provider_message(message: LLMMessage) -> MessageParam:

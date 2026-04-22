@@ -25,6 +25,7 @@ from cagent.llm import (
 from cagent.llm.anthropic import AnthropicClient
 from cagent.llm.llamacpp import LLamaCPP
 from cagent.llm.openai import OpenAIChatCompletionsClient, OpenAIResponsesClient
+from cagent.tracing import Trace, reset_trace, set_trace
 
 
 class FakeClient(LLMClient):
@@ -897,3 +898,56 @@ def test_openai_responses_overrides_model() -> None:
 
     assert sdk_client.payload is not None
     assert sdk_client.payload["model"] == "override-model"
+
+
+def test_openai_chat_completions_creates_trace_span() -> None:
+    trace = Trace()
+    token = set_trace(trace)
+    sdk_client = FakeOpenAIClient(
+        completion=_make_chat_completion(content="traced answer"),
+    )
+    client = OpenAIChatCompletionsClient(
+        client=sdk_client,
+        default_model="gpt-test",
+    )
+    try:
+        response = client.complete("Trace me.", system_prompt="You are helpful.")
+    finally:
+        reset_trace(token)
+
+    assert response.content == "traced answer"
+    assert len(trace.roots) == 1
+    span = trace.roots[0]
+    assert span.name == "llm.complete"
+    assert span.attributes["request"]["user_prompt"] == "Trace me."
+    assert span.attributes["response_content"] == "traced answer"
+    assert span.attributes["message_count"] == 2
+
+
+def test_openai_responses_creates_trace_span() -> None:
+    trace = Trace()
+    token = set_trace(trace)
+    sdk_client = FakeOpenAIResponsesClient(
+        response=_make_response(
+            output=[
+                _make_responses_output_message(
+                    content=[_make_responses_output_text("traced response")]
+                )
+            ]
+        )
+    )
+    client = OpenAIResponsesClient(
+        client=sdk_client,
+        default_model="gpt-test",
+    )
+    try:
+        response = client.complete("Trace me too.")
+    finally:
+        reset_trace(token)
+
+    assert response.content == "traced response"
+    assert len(trace.roots) == 1
+    span = trace.roots[0]
+    assert span.name == "llm.complete"
+    assert span.attributes["request"]["user_prompt"] == "Trace me too."
+    assert span.attributes["response_content"] == "traced response"
