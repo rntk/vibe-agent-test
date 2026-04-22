@@ -33,6 +33,8 @@ def compact_history(
 
     original = tuple(messages)
     total_before = _history_bytes(original)
+    pairs_before = _tool_result_pairs(original)
+    stats_before = _history_stats(original, pairs_before)
 
     with get_trace().span(
         "compaction.run",
@@ -40,21 +42,16 @@ def compact_history(
             "keep_recent": keep_recent,
             "min_savings_bytes": min_savings_bytes,
             "budget_bytes": budget_bytes,
-            "message_count": len(original),
-            "total_bytes_before": total_before,
+            "before": stats_before,
         },
     ) as span:
         if total_before <= budget_bytes:
-            span.set_attribute("triggered", False)
-            span.set_attribute("reason", "under_budget")
-            span.set_attribute("folded_count", 0)
-            span.set_attribute("total_bytes_after", total_before)
-            span.set_attribute("bytes_saved", 0)
+            _record_noop(span, stats_before, "under_budget", triggered=False)
             return original
 
-        pairs = _tool_result_pairs(original)
-        protected_ids = _protected_tool_call_ids(pairs, keep_recent)
-        newest_by_key = _newest_pair_by_key(pairs)
+        protected_ids = _protected_tool_call_ids(pairs_before, keep_recent)
+        newest_by_key = _newest_pair_by_key(pairs_before)
+        pairs = pairs_before
 
         folds: list[_Fold] = []
         for pair in pairs:
@@ -78,11 +75,7 @@ def compact_history(
             )
 
         if not folds:
-            span.set_attribute("triggered", True)
-            span.set_attribute("reason", "no_duplicates")
-            span.set_attribute("folded_count", 0)
-            span.set_attribute("total_bytes_after", total_before)
-            span.set_attribute("bytes_saved", 0)
+            _record_noop(span, stats_before, "no_duplicates", triggered=True)
             return original
 
         folded_messages = list(original)
@@ -97,7 +90,13 @@ def compact_history(
             )
 
         result = tuple(folded_messages)
-        total_after = _history_bytes(result)
+        stats_after = _history_stats(result, _tool_result_pairs(result))
+        bytes_saved = stats_before["total_bytes"] - stats_after["total_bytes"]
+        saved_pct = (
+            round(100.0 * bytes_saved / stats_before["total_bytes"], 2)
+            if stats_before["total_bytes"]
+            else 0.0
+        )
 
         span.set_attribute("triggered", True)
         span.set_attribute("reason", "folded")
@@ -110,12 +109,32 @@ def compact_history(
                     "tool_call_id": fold.call.id,
                     "tool_name": fold.call.name,
                     "superseded_by_index": fold.superseded_by_index,
+                    "bytes_before": len(
+                        original[fold.index].content or ""
+                    ),
+                    "bytes_after": len(
+                        _tombstone_text(fold.call, fold.superseded_by_index)
+                    ),
                 }
                 for fold in folds
             ],
         )
-        span.set_attribute("total_bytes_after", total_after)
-        span.set_attribute("bytes_saved", total_before - total_after)
+        span.set_attribute("after", stats_after)
+        span.set_attribute(
+            "delta",
+            {
+                "bytes_saved": bytes_saved,
+                "bytes_saved_pct": saved_pct,
+                "tombstones_added": (
+                    stats_after["tombstone_count"]
+                    - stats_before["tombstone_count"]
+                ),
+                "active_tool_results_removed": (
+                    stats_before["active_tool_result_count"]
+                    - stats_after["active_tool_result_count"]
+                ),
+            },
+        )
         return result
 
 
@@ -212,6 +231,55 @@ def _tombstone_text(call: ToolCall, superseded_by_index: int) -> str:
 
 def _tombstone_size(call: ToolCall) -> int:
     return len(_tombstone_text(call, 0))
+
+
+def _history_stats(
+    messages: Sequence[LLMMessage],
+    pairs: Sequence[_Pair],
+) -> dict[str, int]:
+    tombstone_count = sum(
+        1 for p in pairs if _is_tombstone(p.result.content)
+    )
+    tool_result_bytes = sum(len(p.result.content or "") for p in pairs)
+    active_tool_result_bytes = sum(
+        len(p.result.content or "")
+        for p in pairs
+        if not _is_tombstone(p.result.content)
+    )
+    return {
+        "message_count": len(messages),
+        "total_bytes": _history_bytes(messages),
+        "tool_call_count": sum(
+            len(m.tool_calls) for m in messages if m.role == "assistant"
+        ),
+        "tool_result_count": len(pairs),
+        "active_tool_result_count": len(pairs) - tombstone_count,
+        "tombstone_count": tombstone_count,
+        "tool_result_bytes": tool_result_bytes,
+        "active_tool_result_bytes": active_tool_result_bytes,
+    }
+
+
+def _record_noop(
+    span: object,
+    stats_before: dict[str, int],
+    reason: str,
+    *,
+    triggered: bool,
+) -> None:
+    span.set_attribute("triggered", triggered)  # type: ignore[attr-defined]
+    span.set_attribute("reason", reason)  # type: ignore[attr-defined]
+    span.set_attribute("folded_count", 0)  # type: ignore[attr-defined]
+    span.set_attribute("after", stats_before)  # type: ignore[attr-defined]
+    span.set_attribute(  # type: ignore[attr-defined]
+        "delta",
+        {
+            "bytes_saved": 0,
+            "bytes_saved_pct": 0.0,
+            "tombstones_added": 0,
+            "active_tool_results_removed": 0,
+        },
+    )
 
 
 def _history_bytes(messages: Sequence[LLMMessage]) -> int:

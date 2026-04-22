@@ -142,5 +142,20 @@ def test_emits_trace_span() -> None:
     assert len(spans) == 1
     attrs = spans[0].attributes
     assert attrs["triggered"] is True
+    assert attrs["reason"] == "folded"
     assert attrs["folded_count"] == 1
-    assert attrs["bytes_saved"] > 0
+    before = attrs["before"]
+    after = attrs["after"]
+    delta = attrs["delta"]
+    assert before["tool_result_count"] == 2
+    assert before["active_tool_result_count"] == 2
+    assert before["tombstone_count"] == 0
+    assert after["tool_result_count"] == 2
+    assert after["tombstone_count"] == 1
+    assert after["active_tool_result_count"] == 1
+    assert delta["bytes_saved"] > 0
+    assert delta["bytes_saved_pct"] > 0
+    assert delta["tombstones_added"] == 1
+    assert delta["active_tool_results_removed"] == 1
+    fold = attrs["folded"][0]
+    assert fold["bytes_before"] > fold["bytes_after"]
