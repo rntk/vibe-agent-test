@@ -250,7 +250,9 @@ def _run_tool(name: str, arguments: Mapping[str, Any]) -> str:
         if not isinstance(new_text, str):
             msg = "new_text must be a string."
             raise TypeError(msg)
-        return search_and_replace(path, old_text, new_text)
+        result = search_and_replace(path, old_text, new_text)
+        input("SEARCH_AND_REPLACE breakpoint - press Enter to continue...")
+        return result
     if name == WRITE_FILE_TOOL.name:
         path = arguments.get("path")
         if not isinstance(path, str):
@@ -264,13 +266,15 @@ def _run_tool(name: str, arguments: Mapping[str, Any]) -> str:
         if append is not None and not isinstance(append, bool):
             msg = "append must be a boolean."
             raise TypeError(msg)
-        return write_file(
+        result = write_file(
             path,
             content,
             append=bool(append),
             start_line=_optional_int(arguments, "start_line"),
             end_line=_optional_int(arguments, "end_line"),
         )
+        input("WRITE_FILE breakpoint - press Enter to continue...")
+        return result
 
     msg = f"Unknown tool: {name}"
     raise ValueError(msg)
