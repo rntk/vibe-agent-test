@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from cagent.advisor import apply_advisor, precheck_tool_call
+from cagent.compaction import compact_history
 from cagent.config import ProviderConfig, load_fast_api_config, load_smart_api_config
 from cagent.llm import LLMClient, LLMMessage, LLMRequest, LLMResponse, ToolCall
 from cagent.llm.anthropic import AnthropicClient
@@ -162,6 +163,7 @@ def run_plan_mode(file_path: str) -> None:
                         tool_call_id=tool_call.id or "",
                     )
                 )
+                messages = list(compact_history(messages))
         else:
             plans_dir = Path("plans")
             plans_dir.mkdir(parents=True, exist_ok=True)
@@ -247,6 +249,7 @@ def run_implementation_mode(file_path: str) -> None:
                         tool_call_id=tool_call.id or "",
                     )
                 )
+                messages = list(compact_history(messages))
         else:
             print(response.content or "")
             return
