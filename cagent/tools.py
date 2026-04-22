@@ -190,6 +190,10 @@ def bash(
     )
 
 
+_MAX_OUTPUT_LINES = 1000
+_MAX_OUTPUT_BYTES = 50 * 1024
+
+
 def _format_bash_output(
     *,
     exit_code: int | None,
@@ -202,7 +206,33 @@ def _format_bash_output(
         parts.append(f"stdout:\n{stdout}")
     if stderr:
         parts.append(f"stderr:\n{stderr}")
-    return "\n".join(parts)
+    result = "\n".join(parts)
+
+    truncated_by_lines = False
+    lines = result.splitlines()
+    if len(lines) > _MAX_OUTPUT_LINES:
+        result = "\n".join(lines[:_MAX_OUTPUT_LINES])
+        truncated_by_lines = True
+
+    truncated_by_bytes = False
+    encoded = result.encode("utf-8")
+    if len(encoded) > _MAX_OUTPUT_BYTES:
+        result = encoded[:_MAX_OUTPUT_BYTES].decode("utf-8", errors="ignore")
+        truncated_by_bytes = True
+
+    if truncated_by_lines or truncated_by_bytes:
+        reasons = []
+        if truncated_by_lines:
+            reasons.append(f"exceeds {_MAX_OUTPUT_LINES} lines")
+        if truncated_by_bytes:
+            reasons.append(f"exceeds {_MAX_OUTPUT_BYTES // 1024} KB")
+        warning = (
+            f"[WARNING] The output was truncated because it {' and '.join(reasons)}."
+            " Try to make the command more precise to reduce the output size.\n\n"
+        )
+        return warning + result
+
+    return result
 
 
 def run_tool(name: str, arguments: Mapping[str, Any]) -> str:

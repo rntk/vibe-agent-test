@@ -9,6 +9,7 @@ from cagent.tools import (
     BUILTIN_TOOLS,
     IMPLEMENTATION_TOOLS,
     PLAN_TOOLS,
+    _format_bash_output,
     bash,
     run_tool,
     run_tool_call,
@@ -50,6 +51,37 @@ def test_run_tool_dispatches_bash_with_cwd(tmp_path: Path) -> None:
 
     assert "exit_code: 0\n" in result
     assert f"stdout:\n{tmp_path}\n" in result
+
+
+def test_bash_output_not_truncated_when_within_limit() -> None:
+    stdout = "\n".join(f"line {i}" for i in range(998))
+    result = _format_bash_output(exit_code=0, stdout=stdout, stderr="")
+
+    assert "[WARNING]" not in result
+    assert result.count("\n") == 999
+
+
+def test_bash_output_truncated_when_exceeds_limit() -> None:
+    stdout = "\n".join(f"line {i}" for i in range(999))
+    result = _format_bash_output(exit_code=0, stdout=stdout, stderr="")
+
+    lines = result.splitlines()
+    assert lines[0].startswith("[WARNING]")
+    assert "truncated" in lines[0].lower()
+    assert "1000 lines" in lines[0]
+    assert len(lines) == 1002  # warning + blank + 1000 truncated lines
+
+
+def test_bash_output_truncated_when_exceeds_byte_size() -> None:
+    # Few lines but each line is large enough to push total over 50 KB
+    long_line = "x" * 1024
+    stdout = "\n".join(long_line for _ in range(60))
+    result = _format_bash_output(exit_code=0, stdout=stdout, stderr="")
+
+    lines = result.splitlines()
+    assert lines[0].startswith("[WARNING]")
+    assert "50 KB" in lines[0]
+    assert len(result.encode("utf-8")) <= 50 * 1024 + len(lines[0].encode("utf-8")) + 2
 
 
 def test_write_file_creates_file_and_directories(tmp_path: Path) -> None:
