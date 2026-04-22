@@ -19,6 +19,7 @@ class ToolDefinition:
     name: str
     description: str
     parameters: Mapping[str, Any] = field(default_factory=dict)
+    strict: bool | None = None
 
 
 BASH_TOOL = ToolDefinition(
@@ -147,6 +148,7 @@ class LLMMessage:
     content: str | None = None
     tool_calls: Sequence[ToolCall] = field(default_factory=tuple)
     tool_call_id: str | None = None
+    reasoning: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +161,9 @@ class LLMRequest:
     model: str | None = None
     temperature: float | None = None
     messages: Sequence[LLMMessage] = field(default_factory=tuple)
+    tool_choice: str | dict[str, Any] | None = None
+    parallel_tool_calls: bool | None = None
+    output_schema: Mapping[str, Any] | None = None
 
     def all_messages(self) -> tuple[LLMMessage, ...]:
         """Return request messages with system and user prompts applied."""
@@ -198,6 +203,9 @@ class LLMClient(ABC):
         model: str | None = None,
         temperature: float | None = None,
         messages: Sequence[LLMMessage] = (),
+        tool_choice: str | dict[str, Any] | None = None,
+        parallel_tool_calls: bool | None = None,
+        output_schema: Mapping[str, Any] | None = None,
     ) -> LLMResponse:
         """Run one provider-neutral LLM turn."""
 
@@ -205,8 +213,10 @@ class LLMClient(ABC):
             system_prompt = (
                 "You are a software engineering assistant. "
                 "Use the available tools to research the current project. "
-                "If the users task already implemented in the codebase, find the relevant code, explain it to the user and finish. "
-                "Otherwise, research how to implement the users request using the available tools and information in the codebase. "
+                "If the users task already implemented in the codebase, find "
+                "the relevant code, explain it to the user and finish. "
+                "Otherwise, research how to implement the users request using "
+                "the available tools and information in the codebase. "
                 "Current directory: /app"
             )
 
@@ -217,6 +227,9 @@ class LLMClient(ABC):
             model=model,
             temperature=temperature,
             messages=messages,
+            tool_choice=tool_choice,
+            parallel_tool_calls=parallel_tool_calls,
+            output_schema=output_schema,
         )
         all_msgs = request.all_messages()
         with get_trace().span(

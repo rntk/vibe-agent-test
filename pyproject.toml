@@ -8,6 +8,8 @@ packages = [{ include = "cagent" }]
 
 [tool.poetry.dependencies]
 python = "^3.12"
+anthropic = "^0.96.0"
+openai = "^2.32.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2"
