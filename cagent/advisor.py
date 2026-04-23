@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 from cagent.llm.base import (
     BASH_TOOL,
@@ -54,14 +55,14 @@ PRECHECK_SYSTEM_PROMPT = (
 
 EDIT_PRECHECK_SYSTEM_PROMPT = (
     "You are a senior code-review gate before another, faster agent applies a "
-    "file edit. You see ONE pending edit (write_file or search_and_replace) and "
-    "a brief description of the overall task. You have NO conversation history "
-    "and no knowledge of what the fast agent already tried.\n\n"
-    "You may call the `bash` tool to gather context: read the target file with "
-    "`cat -n`, `grep`/`rg` for duplicated logic or existing helpers, inspect "
-    "neighboring modules, check how similar things are done elsewhere. You are "
-    "the slow, careful overseer — the fast agent is quick but can miss "
-    "architectural context.\n\n"
+    "file edit. You see ONE pending edit (write_file or search_and_replace), "
+    "the current content of the target file, and a brief description of the "
+    "overall task. You have NO conversation history and no knowledge of what "
+    "the fast agent already tried.\n\n"
+    "You may call the `bash` tool to gather additional context: inspect "
+    "neighboring modules, check how similar things are done elsewhere, look "
+    "for existing helpers or duplicated logic. You are the slow, careful "
+    "overseer — the fast agent is quick but can miss architectural context.\n\n"
     "Flag ONLY clear, evidence-backed architectural problems, such as:\n"
     "- Reimplementing logic that already exists in the codebase\n"
     "- Breaking an established pattern visible in sibling/neighbor code\n"
@@ -84,6 +85,8 @@ EDIT_PRECHECK_SYSTEM_PROMPT = (
 _NONE_MARKERS = {"none", "none.", "n/a", "n/a."}
 _EDIT_PRECHECK_MAX_ITERATIONS = 5
 _EDIT_PRECHECK_TIME_BUDGET_SECONDS = 60.0
+_MAX_FILE_LINES_FOR_PRECHECK = 1000
+_MAX_FILE_BYTES_FOR_PRECHECK = 50 * 1024
 
 
 def request_advice(
@@ -208,14 +211,28 @@ def request_edit_precheck(
         if task_summary and task_summary.strip()
         else "(no task summary provided)"
     )
+    edit_path = _get_edit_path(tool_call)
+    file_content = _read_file_for_precheck(edit_path)
+
+    file_section = ""
+    if file_content is not None:
+        file_section = (
+            f'<target_file path="{edit_path}">\n'
+            f"{file_content}\n"
+            f"</target_file>\n\n"
+        )
+
     user_prompt = (
-        f"Overall task:\n{task_line}\n\n"
-        f"Pending edit to review:\n{edit_summary}\n\n"
+        f"<task>\n{task_line}\n</task>\n\n"
+        f"<pending_edit>\n{edit_summary}\n</pending_edit>\n\n"
+        f"{file_section}"
+        f"<instructions>\n"
         f"Budget: up to {max_iterations} tool calls and "
         f"{int(time_budget_seconds)} seconds of wall clock. After that your "
         f"answer is discarded and the edit proceeds. When done, reply with no "
         f"tool calls: exactly `None` if acceptable or uncertain, otherwise one "
-        f"short sentence naming the concrete problem."
+        f"short sentence naming the concrete problem.\n"
+        f"</instructions>"
     )
 
     messages: list[LLMMessage] = []
@@ -288,6 +305,51 @@ def request_edit_precheck(
         return None
 
 
+def _get_edit_path(tool_call: ToolCall) -> str:
+    return tool_call.arguments.get("path", "") or ""
+
+
+def _read_file_for_precheck(path: str) -> str | None:
+    if not path:
+        return None
+    file_path = Path(path)
+    if not file_path.is_file():
+        return None
+    try:
+        content = file_path.read_text(encoding="utf-8")
+    except Exception:
+        return None
+
+    lines = content.splitlines()
+    truncated_by_lines = False
+    truncated_by_bytes = False
+
+    if len(lines) > _MAX_FILE_LINES_FOR_PRECHECK:
+        content = "\n".join(lines[:_MAX_FILE_LINES_FOR_PRECHECK])
+        truncated_by_lines = True
+
+    encoded = content.encode("utf-8")
+    if len(encoded) > _MAX_FILE_BYTES_FOR_PRECHECK:
+        content = encoded[:_MAX_FILE_BYTES_FOR_PRECHECK].decode(
+            "utf-8", errors="ignore"
+        )
+        truncated_by_bytes = True
+
+    if truncated_by_lines or truncated_by_bytes:
+        reasons = []
+        if truncated_by_lines:
+            reasons.append(f"exceeds {_MAX_FILE_LINES_FOR_PRECHECK} lines")
+        if truncated_by_bytes:
+            reasons.append(f"exceeds {_MAX_FILE_BYTES_FOR_PRECHECK // 1024} KB")
+        warning = (
+            f"[WARNING] File content was truncated because it "
+            f"{' and '.join(reasons)}.\n\n"
+        )
+        content = warning + content
+
+    return content
+
+
 def _format_edit_for_review(tool_call: ToolCall) -> str:
     name = tool_call.name
     args = tool_call.arguments
@@ -304,18 +366,28 @@ def _format_edit_for_review(tool_call: ToolCall) -> str:
         else:
             mode = "overwrite"
         return (
-            f"Tool: write_file\nPath: {path}\nMode: {mode}\n"
-            f"Content:\n{content}"
+            f'<edit tool="write_file">\n'
+            f"  <path>{path}</path>\n"
+            f"  <mode>{mode}</mode>\n"
+            f"  <content>\n{content}\n  </content>\n"
+            f"</edit>"
         )
     if name == SEARCH_AND_REPLACE_TOOL.name:
         path = args.get("path", "")
         old_text = args.get("old_text", "")
         new_text = args.get("new_text", "")
         return (
-            f"Tool: search_and_replace\nPath: {path}\n"
-            f"OLD TEXT:\n{old_text}\n\nNEW TEXT:\n{new_text}"
+            f'<edit tool="search_and_replace">\n'
+            f"  <path>{path}</path>\n"
+            f"  <old_text>\n{old_text}\n  </old_text>\n"
+            f"  <new_text>\n{new_text}\n  </new_text>\n"
+            f"</edit>"
         )
-    return f"Tool: {name}\nArgs: {args}"
+    return (
+        f'<edit tool="{name}">\n'
+        f"  <args>{args}</args>\n"
+        f"</edit>"
+    )
 
 
 def _format_prompt(advisor_input: AdvisorInput) -> str:
