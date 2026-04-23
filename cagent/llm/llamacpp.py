@@ -240,14 +240,14 @@ class LLamaCPP(LLMClient):
             payload: dict[str, Any] = {
                 "model": self.__model,
                 "messages": self.to_provider_messages(messages),
-                "temperature": temperature,
+                #"temperature": temperature,
                 "cache_prompt": True,
-                "min_p": self.__min_p,
-                "repeat_penalty": self.__repeat_penalty,
-                "repeat_last_n": self.__repeat_last_n,
-                "dry_multiplier": self.__dry_multiplier,
-                "dry_base": self.__dry_base,
-                "dry_allowed_length": self.__dry_allowed_length,
+                #"min_p": self.__min_p,
+                #"repeat_penalty": self.__repeat_penalty,
+                #"repeat_last_n": self.__repeat_last_n,
+                #"dry_multiplier": self.__dry_multiplier,
+                #"dry_base": self.__dry_base,
+                #"dry_allowed_length": self.__dry_allowed_length,
                 # "stop": self.__stop,
             }
             if tools:
