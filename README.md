@@ -1,7 +1,6 @@
 # cagent
 
-A Python CLI application managed by **Poetry**, linted and formatted with
-**Ruff**, tested with **pytest** — all running inside Docker.
+`cagent` is an experimental vibe coding agent. It employs a dual-model architecture where a small, fast model executes the heavy lifting, while a larger, smart model acts as an overseer to guide the process and ensure quality.
 
 ## Quick start
 
@@ -29,27 +28,5 @@ docker run --rm cagent:dev ruff format .
 
 # Check formatting without changes
 docker run --rm cagent:dev ruff format --check .
-```
-
-## Project layout
-
-```
-cagent/              # Application source
-├── llm/             # LLM client adapters
-├── advisor.py
-├── checkpoints.py
-├── cli.py
-├── clients.py
-├── compaction.py
-├── config.py
-├── main.py
-├── modes.py
-├── tools.py
-└── tracing.py
-tests/               # pytest suite
-main.py              # Entry-point
-Dockerfile           # Production image
-Dockerfile.dev       # Development image
-pyproject.toml       # Poetry + Ruff + pytest config
 ```
 ```
