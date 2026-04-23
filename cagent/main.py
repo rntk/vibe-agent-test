@@ -144,7 +144,12 @@ def run_plan_mode(file_path: str) -> None:
             )
             for tool_call in tool_calls:
                 try:
-                    blocked = precheck_tool_call(tool_call, fast_client)
+                    blocked = precheck_tool_call(
+                        tool_call,
+                        fast_client,
+                        smart_client=smart_client,
+                        task_summary=prompt,
+                    )
                     if blocked is not None:
                         tool_result = blocked
                     else:
@@ -230,7 +235,12 @@ def run_implementation_mode(file_path: str) -> None:
             )
             for tool_call in tool_calls:
                 try:
-                    blocked = precheck_tool_call(tool_call, fast_client)
+                    blocked = precheck_tool_call(
+                        tool_call,
+                        fast_client,
+                        smart_client=smart_client,
+                        task_summary=task_content,
+                    )
                     if blocked is not None:
                         tool_result = blocked
                     else:
