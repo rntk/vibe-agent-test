@@ -284,13 +284,32 @@ def run_implementation_mode(file_path: str) -> None:
 
 
 _CHECKPOINT_SYSTEM_PROMPT = (
-    "You compress an agent's step into a terse checkpoint line. "
-    "Given the agent's reasoning, the tool call it made, and the tool result, "
-    "output exactly three short lines:\n"
-    "intention: <one sentence, what the agent wanted>\n"
-    "action: <one sentence, what tool was called and key arguments>\n"
-    "result: <one sentence, the essential outcome or key facts learned>\n"
-    "Be concise. No preamble, no bullet points, no extra lines."
+    "<role>\n"
+    "You compress an agent's step into a terse checkpoint so the agent can "
+    "track progress across iterations, like a checklist entry.\n"
+    "</role>\n"
+    "<input>\n"
+    "You will receive the agent's reasoning, the tool call it made, and the "
+    "tool result, each wrapped in its own tag.\n"
+    "</input>\n"
+    "<output_format>\n"
+    "Output exactly three short lines, nothing else:\n"
+    "intention: <one short sentence describing what the agent wanted>\n"
+    "action: <very brief description of the action taken>\n"
+    "arguments>\n"
+    "result: <very brief phrase: success/failure and at most one key fact>\n"
+    "</output_format>\n"
+    "<rules>\n"
+    "- Be extremely brief on action and result. The agent already has the "
+    "full tool call and full tool result in its context; do not restate them.\n"
+    "- For action, do not quote full arguments or file contents. Example: "
+    "for `cat -n /app/file.py` write `action: read /app/file.py`.\n"
+    "- For result, do not repeat the output. Just say whether it succeeded "
+    "and, if useful, a tiny hint. Examples: `result: file read successfully`, "
+    "`result: command failed (file not found)`, `result: grep found 3 "
+    "matches in src/`.\n"
+    "- No preamble, no bullets, no code fences, no extra lines.\n"
+    "</rules>"
 )
 
 
@@ -303,15 +322,18 @@ def _format_checkpoint(
 
     raw_lines: list[str] = []
     reasoning_text = (reasoning or "").strip()
-    if reasoning_text:
-        raw_lines.append(f"Reasoning: {reasoning_text}")
+    raw_lines.append(f"<reasoning>\n{reasoning_text}\n</reasoning>")
     for tool_call, result in steps:
         try:
             args_str = json.dumps(tool_call.arguments or {}, ensure_ascii=False)
         except (TypeError, ValueError):
             args_str = str(tool_call.arguments)
-        raw_lines.append(f"Tool call: {tool_call.name}({args_str})")
-        raw_lines.append(f"Tool result: {(result or '').strip()}")
+        raw_lines.append(
+            f"<tool_call name=\"{tool_call.name}\">\n{args_str}\n</tool_call>"
+        )
+        raw_lines.append(
+            f"<tool_result>\n{(result or '').strip()}\n</tool_result>"
+        )
     raw = "\n".join(raw_lines)
 
     try:
