@@ -34,16 +34,22 @@ docker run --rm cagent:dev ruff format --check .
 ## Project layout
 
 ```
-cagent/
-├── cagent/          # Application source
-│   ├── __init__.py
-│   ├── config.py
-│   ├── tools.py
-│   ├── tracing.py
-│   └── llm/         # LLM client adapters
-├── tests/           # pytest suite
-├── main.py          # Entry-point
-├── Dockerfile       # Production image
-├── Dockerfile.dev   # Development image
-└── pyproject.toml   # Poetry + Ruff + pytest config
+cagent/              # Application source
+├── llm/             # LLM client adapters
+├── advisor.py
+├── checkpoints.py
+├── cli.py
+├── clients.py
+├── compaction.py
+├── config.py
+├── main.py
+├── modes.py
+├── tools.py
+└── tracing.py
+tests/               # pytest suite
+main.py              # Entry-point
+Dockerfile           # Production image
+Dockerfile.dev       # Development image
+pyproject.toml       # Poetry + Ruff + pytest config
+```
 ```
