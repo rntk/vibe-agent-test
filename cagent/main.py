@@ -12,6 +12,8 @@ from pathlib import Path
 from cagent.advisor import apply_advisor, precheck_tool_call
 from cagent.compaction import compact_history
 from cagent.config import ProviderConfig, load_fast_api_config, load_smart_api_config
+import json
+
 from cagent.llm import LLMClient, LLMMessage, LLMRequest, LLMResponse, ToolCall
 from cagent.llm.anthropic import AnthropicClient
 from cagent.llm.llamacpp import LLamaCPP
@@ -119,6 +121,7 @@ def run_plan_mode(file_path: str) -> None:
 
     messages: list[LLMMessage] = []
     max_iterations = 20
+    next_user_prompt = ""
 
     for iteration in range(max_iterations):
         if iteration == 0:
@@ -126,7 +129,8 @@ def run_plan_mode(file_path: str) -> None:
             user_message = LLMMessage(role="user", content=prompt)
             messages.append(user_message)
         else:
-            user_prompt = ""
+            user_prompt = next_user_prompt
+            next_user_prompt = ""
         response = fast_client.complete(
             user_prompt,
             tools=PLAN_TOOLS,
@@ -142,6 +146,7 @@ def run_plan_mode(file_path: str) -> None:
                     tool_calls=tool_calls,
                 )
             )
+            steps: list[tuple[ToolCall, str]] = []
             for tool_call in tool_calls:
                 try:
                     blocked = precheck_tool_call(
@@ -168,7 +173,9 @@ def run_plan_mode(file_path: str) -> None:
                         tool_call_id=tool_call.id or "",
                     )
                 )
+                steps.append((tool_call, content))
                 messages = list(compact_history(messages))
+            next_user_prompt = _format_checkpoint(fast_client, response.content, steps)
         else:
             plans_dir = Path("plans")
             plans_dir.mkdir(parents=True, exist_ok=True)
@@ -209,6 +216,7 @@ def run_implementation_mode(file_path: str) -> None:
 
     messages: list[LLMMessage] = []
     max_iterations = 20
+    next_user_prompt = ""
 
     for iteration in range(max_iterations):
         if iteration == 0:
@@ -216,7 +224,8 @@ def run_implementation_mode(file_path: str) -> None:
             user_message = LLMMessage(role="user", content=task_content)
             messages.append(user_message)
         else:
-            user_prompt = ""
+            user_prompt = next_user_prompt
+            next_user_prompt = ""
         response = fast_client.complete(
             user_prompt,
             system_prompt=system_prompt,
@@ -233,6 +242,7 @@ def run_implementation_mode(file_path: str) -> None:
                     tool_calls=tool_calls,
                 )
             )
+            steps: list[tuple[ToolCall, str]] = []
             for tool_call in tool_calls:
                 try:
                     blocked = precheck_tool_call(
@@ -259,7 +269,9 @@ def run_implementation_mode(file_path: str) -> None:
                         tool_call_id=tool_call.id or "",
                     )
                 )
+                steps.append((tool_call, content))
                 messages = list(compact_history(messages))
+            next_user_prompt = _format_checkpoint(fast_client, response.content, steps)
         else:
             print(response.content or "")
             return
@@ -269,6 +281,46 @@ def run_implementation_mode(file_path: str) -> None:
         file=sys.stderr,
     )
     sys.exit(1)
+
+
+_CHECKPOINT_SYSTEM_PROMPT = (
+    "You compress an agent's step into a terse checkpoint line. "
+    "Given the agent's reasoning, the tool call it made, and the tool result, "
+    "output exactly three short lines:\n"
+    "intention: <one sentence, what the agent wanted>\n"
+    "action: <one sentence, what tool was called and key arguments>\n"
+    "result: <one sentence, the essential outcome or key facts learned>\n"
+    "Be concise. No preamble, no bullet points, no extra lines."
+)
+
+
+def _format_checkpoint(
+    client: LLMClient,
+    reasoning: str | None,
+    steps: Sequence[tuple[ToolCall, str]],
+) -> str:
+    """Ask the LLM to summarize reasoning + tool calls + results as a checkpoint."""
+
+    raw_lines: list[str] = []
+    reasoning_text = (reasoning or "").strip()
+    if reasoning_text:
+        raw_lines.append(f"Reasoning: {reasoning_text}")
+    for tool_call, result in steps:
+        try:
+            args_str = json.dumps(tool_call.arguments or {}, ensure_ascii=False)
+        except (TypeError, ValueError):
+            args_str = str(tool_call.arguments)
+        raw_lines.append(f"Tool call: {tool_call.name}({args_str})")
+        raw_lines.append(f"Tool result: {(result or '').strip()}")
+    raw = "\n".join(raw_lines)
+
+    try:
+        response = client.complete(raw, system_prompt=_CHECKPOINT_SYSTEM_PROMPT)
+        summary = (response.content or "").strip()
+    except Exception as exc:
+        summary = f"(checkpoint summarization failed: {exc})\n{raw}"
+
+    return summary or raw
 
 
 def _tool_calls_with_ids(
