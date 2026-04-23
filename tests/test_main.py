@@ -44,8 +44,8 @@ def test_run_implementation_mode_prints_final_content(
     client = FakeLLMClient([LLMResponse(content="All done.")])
 
     with (
-        patch("cagent.main.create_fast_api_client", return_value=client),
-        patch("cagent.main.create_smart_api_client", return_value=None),
+        patch("cagent.modes.create_fast_api_client", return_value=client),
+        patch("cagent.modes.create_smart_api_client", return_value=None),
     ):
         run_implementation_mode(str(prompt_file))
 
@@ -80,8 +80,9 @@ def test_run_implementation_mode_calls_tools_and_loops(
     client = FakeLLMClient(responses)
 
     with (
-        patch("cagent.main.create_fast_api_client", return_value=client),
-        patch("cagent.main.create_smart_api_client", return_value=None),
+        patch("cagent.modes.create_fast_api_client", return_value=client),
+        patch("cagent.modes.create_smart_api_client", return_value=None),
+        patch("cagent.modes._format_checkpoint", return_value="checkpoint"),
     ):
         run_implementation_mode(str(prompt_file))
 
@@ -120,8 +121,9 @@ def test_run_implementation_mode_passes_advisor_tool_to_smart_api(
     smart_client = FakeLLMClient([LLMResponse(content="Prefer the existing helper.")])
 
     with (
-        patch("cagent.main.create_fast_api_client", return_value=fast_client),
-        patch("cagent.main.create_smart_api_client", return_value=smart_client),
+        patch("cagent.modes.create_fast_api_client", return_value=fast_client),
+        patch("cagent.modes.create_smart_api_client", return_value=smart_client),
+        patch("cagent.modes._format_checkpoint", return_value="checkpoint"),
     ):
         run_implementation_mode(str(prompt_file))
 
@@ -173,9 +175,10 @@ def test_run_implementation_mode_exits_on_max_iterations(tmp_path: Path) -> None
     client = FakeLLMClient(responses)
 
     with (
-        patch("cagent.main.create_fast_api_client", return_value=client),
-        patch("cagent.main.create_smart_api_client", return_value=None),
-        patch("cagent.main.precheck_tool_call", return_value=None),
+        patch("cagent.modes.create_fast_api_client", return_value=client),
+        patch("cagent.modes.create_smart_api_client", return_value=None),
+        patch("cagent.modes.precheck_tool_call", return_value=None),
+        patch("cagent.modes._format_checkpoint", return_value="checkpoint"),
         pytest.raises(SystemExit) as exc_info,
     ):
         run_implementation_mode(str(prompt_file))
@@ -279,8 +282,8 @@ def test_run_plan_mode_saves_plan(
     os.chdir(tmp_path)
     try:
         with (
-            patch("cagent.main.create_fast_api_client", return_value=client),
-            patch("cagent.main.create_smart_api_client", return_value=None),
+            patch("cagent.modes.create_fast_api_client", return_value=client),
+            patch("cagent.modes.create_smart_api_client", return_value=None),
         ):
             run_plan_mode(str(task_file))
     finally:
@@ -323,9 +326,10 @@ def test_run_plan_mode_calls_tools_and_loops(
     os.chdir(tmp_path)
     try:
         with (
-            patch("cagent.main.create_fast_api_client", return_value=client),
-            patch("cagent.main.create_smart_api_client", return_value=None),
-            patch("cagent.main.precheck_tool_call", return_value=None),
+            patch("cagent.modes.create_fast_api_client", return_value=client),
+            patch("cagent.modes.create_smart_api_client", return_value=None),
+            patch("cagent.modes.precheck_tool_call", return_value=None),
+            patch("cagent.modes._format_checkpoint", return_value="checkpoint"),
         ):
             run_plan_mode(str(task_file))
     finally:
@@ -374,9 +378,10 @@ def test_run_plan_mode_exits_on_max_iterations(
     os.chdir(tmp_path)
     try:
         with (
-            patch("cagent.main.create_fast_api_client", return_value=client),
-            patch("cagent.main.create_smart_api_client", return_value=None),
-            patch("cagent.main.precheck_tool_call", return_value=None),
+            patch("cagent.modes.create_fast_api_client", return_value=client),
+            patch("cagent.modes.create_smart_api_client", return_value=None),
+            patch("cagent.modes.precheck_tool_call", return_value=None),
+            patch("cagent.modes._format_checkpoint", return_value="checkpoint"),
             pytest.raises(SystemExit) as exc_info,
         ):
             run_plan_mode(str(task_file))

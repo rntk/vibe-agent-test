@@ -33,6 +33,12 @@ def main() -> None:
         metavar="FILE",
         help="Enable debug tracing and optionally write JSON trace output to FILE",
     )
+    parser.add_argument(
+        "--bash-advisor",
+        choices=["off", "fast", "smart"],
+        default="off",
+        help="Bash command pre-execution advisor model (off, fast, or smart)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -42,6 +48,10 @@ def main() -> None:
         args.implementation,
         args.trace,
     )
+    if args.bash_advisor == "off":
+        logging.info("Bash advisor disabled")
+    else:
+        logging.info("Bash advisor enabled: %s", args.bash_advisor)
 
     if args.trace is not None:
         trace = Trace()
@@ -73,11 +83,11 @@ def _run_args(args: argparse.Namespace) -> None:
     """Run the CLI mode selected by parsed arguments."""
 
     if args.plan:
-        run_plan_mode(args.plan)
+        run_plan_mode(args.plan, bash_advisor=args.bash_advisor)
         return
 
     if args.implementation:
-        run_implementation_mode(args.implementation)
+        run_implementation_mode(args.implementation, bash_advisor=args.bash_advisor)
         return
 
     fast_client = create_fast_api_client()

@@ -36,13 +36,19 @@ def _tool_calls_with_ids(
     return tuple(normalized_tool_calls)
 
 
-def run_plan_mode(file_path: str) -> None:
+def run_plan_mode(file_path: str, bash_advisor: str = "off") -> None:
     """Run planning mode using FAST_API and save the result."""
     fast_client = create_fast_api_client()
     if fast_client is None:
         print("Error: FAST_API_HOST is not configured.", file=sys.stderr)
         sys.exit(1)
     smart_client = create_smart_api_client()
+
+    bash_client = None
+    if bash_advisor == "fast":
+        bash_client = fast_client
+    elif bash_advisor == "smart":
+        bash_client = smart_client
 
     task_content = Path(file_path).read_text(encoding="utf-8")
     plan_template = Path("prompts/plan.md").read_text(encoding="utf-8")
@@ -80,7 +86,7 @@ def run_plan_mode(file_path: str) -> None:
                 try:
                     blocked = precheck_tool_call(
                         tool_call,
-                        fast_client,
+                        bash_client,
                         smart_client=smart_client,
                         task_summary=prompt,
                     )
@@ -123,13 +129,19 @@ def run_plan_mode(file_path: str) -> None:
     sys.exit(1)
 
 
-def run_implementation_mode(file_path: str) -> None:
+def run_implementation_mode(file_path: str, bash_advisor: str = "off") -> None:
     """Run implementation mode using FAST_API with read, bash, and write tools."""
     fast_client = create_fast_api_client()
     if fast_client is None:
         print("Error: FAST_API_HOST is not configured.", file=sys.stderr)
         sys.exit(1)
     smart_client = create_smart_api_client()
+
+    bash_client = None
+    if bash_advisor == "fast":
+        bash_client = fast_client
+    elif bash_advisor == "smart":
+        bash_client = smart_client
 
     task_content = Path(file_path).read_text(encoding="utf-8")
 
@@ -176,7 +188,7 @@ def run_implementation_mode(file_path: str) -> None:
                 try:
                     blocked = precheck_tool_call(
                         tool_call,
-                        fast_client,
+                        bash_client,
                         smart_client=smart_client,
                         task_summary=task_content,
                     )
