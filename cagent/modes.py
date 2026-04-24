@@ -79,6 +79,8 @@ def run_plan_mode(file_path: str, bash_advisor: str = "off") -> None:
                     role="assistant",
                     content=response.content,
                     tool_calls=tool_calls,
+                    reasoning=response.reasoning,
+                    thought_signature=response.thought_signature,
                 )
             )
             steps: list[tuple[ToolCall, str]] = []
@@ -181,6 +183,8 @@ def run_implementation_mode(file_path: str, bash_advisor: str = "off") -> None:
                     role="assistant",
                     content=response.content,
                     tool_calls=tool_calls,
+                    reasoning=response.reasoning,
+                    thought_signature=response.thought_signature,
                 )
             )
             steps: list[tuple[ToolCall, str]] = []

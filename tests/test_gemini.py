@@ -105,6 +105,78 @@ def test_gemini_tool_calls() -> None:
     assert tools_payload[0].function_declarations[0].name == "get_weather"
 
 
+def test_gemini_strip_additional_properties() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "nested": {
+                "type": "object",
+                "properties": {"foo": {"type": "string"}},
+                "additionalProperties": False
+            }
+        },
+        "additionalProperties": False
+    }
+    
+    cleaned = GeminiClient._strip_additional_properties(schema)
+    
+    assert "additionalProperties" not in cleaned
+    assert "additionalProperties" not in cleaned["properties"]["nested"]
+    assert cleaned["properties"]["query"] == {"type": "string"}
+    assert cleaned["properties"]["nested"]["properties"]["foo"] == {"type": "string"}
+
+
+def test_gemini_thought_signature() -> None:
+    # "sig123" in base64 is "c2lnMTIz"
+    sig_b64 = "c2lnMTIz"
+    sig_bytes = b"sig123"
+    
+    candidate = types.Candidate(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name="get_weather",
+                        args={"location": "SF"},
+                    ),
+                    thought_signature=sig_bytes
+                )
+            ],
+        )
+    )
+    response = types.GenerateContentResponse(candidates=[candidate])
+    
+    fake_client = MagicMock()
+    fake_client.models = FakeGeminiModels(response)
+    
+    client = GeminiClient(client=fake_client, model="gemini-2.0-flash")
+    
+    resp = client.complete(user_prompt="Weather?")
+    
+    assert resp.thought_signature == sig_b64
+    
+    # Now simulate a second turn where we send it back
+    messages = [
+        LLMMessage(role="user", content="Weather?"),
+        LLMMessage(
+            role="assistant",
+            tool_calls=[ToolCall(name="get_weather", arguments={"location": "SF"}, id="call1")],
+            thought_signature=sig_b64
+        )
+    ]
+    
+    client.complete(user_prompt="Wait, I meant NY", messages=messages)
+    
+    contents = fake_client.models.payload["contents"]
+    # In the history turn for the model:
+    model_turn = contents[1]
+    assert model_turn.role == "model"
+    assert model_turn.parts[0].function_call.name == "get_weather"
+    assert model_turn.parts[0].thought_signature == sig_bytes
+
+
 def test_gemini_tool_response() -> None:
     fake_client = MagicMock()
     # We just want to check the payload sent to the API

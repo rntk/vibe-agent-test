@@ -149,6 +149,7 @@ class LLMMessage:
     tool_calls: Sequence[ToolCall] = field(default_factory=tuple)
     tool_call_id: str | None = None
     reasoning: str | None = None
+    thought_signature: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,6 +185,7 @@ class LLMResponse:
 
     content: str | None = None
     reasoning: str | None = None
+    thought_signature: str | None = None
     tool_calls: Sequence[ToolCall] = field(default_factory=tuple)
     raw: Any | None = None
 

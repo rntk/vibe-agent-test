@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -123,16 +124,43 @@ class GeminiClient(LLMClient):
         if message.content:
             parts.append(types.Part(text=message.content))
 
-        if message.role == "assistant" and message.tool_calls:
-            for tool_call in message.tool_calls:
-                parts.append(
-                    types.Part(
-                        function_call=types.FunctionCall(
+        if message.role == "assistant":
+            if message.reasoning:
+                parts.append(types.Part(text=message.reasoning, thought=True))
+
+            if message.tool_calls:
+                for index, tool_call in enumerate(message.tool_calls):
+                    part_kwargs: dict[str, Any] = {
+                        "function_call": types.FunctionCall(
                             name=tool_call.name,
                             args=dict(tool_call.arguments),
                         )
-                    )
-                )
+                    }
+                    # According to Gemini API docs, thought_signature should be 
+                    # included with the function call (typically the first one 
+                    # if parallel).
+                    if index == 0 and message.thought_signature:
+                        try:
+                            part_kwargs["thought_signature"] = base64.b64decode(message.thought_signature)
+                        except Exception:
+                            part_kwargs["thought_signature"] = message.thought_signature
+                    
+                    parts.append(types.Part(**part_kwargs))
+            elif message.thought_signature:
+                try:
+                    ts_bytes = base64.b64decode(message.thought_signature)
+                except Exception:
+                    ts_bytes = message.thought_signature  # type: ignore
+
+                if parts:
+                    last_part = parts[-1]
+                    if last_part.text:
+                        parts[-1] = types.Part(
+                            text=last_part.text,
+                            thought_signature=ts_bytes
+                        )
+                else:
+                    parts.append(types.Part(thought_signature=ts_bytes))
 
         role = "user" if message.role == "user" else "model"
         return types.Content(role=role, parts=parts)
@@ -143,16 +171,30 @@ class GeminiClient(LLMClient):
 
         function_declarations = []
         for tool in tools:
-            # Gemini expects Schema object or dict that matches.
-            # python-genai usually accepts dicts for parameters.
+            # Gemini is strict about JSON schema and often rejects 'additionalProperties'.
+            # We recursively strip it from the parameters.
+            cleaned_parameters = GeminiClient._strip_additional_properties(
+                dict(tool.parameters)
+            )
             function_declarations.append(
                 types.FunctionDeclaration(
                     name=tool.name,
                     description=tool.description,
-                    parameters=tool.parameters,
+                    parameters=cleaned_parameters,
                 )
             )
         return [types.Tool(function_declarations=function_declarations)]
+
+    @staticmethod
+    def _strip_additional_properties(schema: Any) -> Any:
+        """Recursively remove additionalProperties from a JSON schema."""
+        if not isinstance(schema, dict):
+            return schema
+
+        # Create a copy to avoid mutating the original
+        cleaned = {k: GeminiClient._strip_additional_properties(v) for k, v in schema.items() 
+                   if k not in ("additionalProperties", "additional_properties")}
+        return cleaned
 
     @staticmethod
     def from_provider_response(response: types.GenerateContentResponse) -> LLMResponse:
@@ -161,6 +203,7 @@ class GeminiClient(LLMClient):
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         tool_calls: list[ToolCall] = []
+        thought_signature: str | None = None
 
         if not response.candidates:
             return LLMResponse(raw=response)
@@ -168,6 +211,12 @@ class GeminiClient(LLMClient):
         candidate = response.candidates[0]
         if candidate.content and candidate.content.parts:
             for part in candidate.content.parts:
+                if part.thought_signature:
+                    if isinstance(part.thought_signature, bytes):
+                        thought_signature = base64.b64encode(part.thought_signature).decode("utf-8")
+                    else:
+                        thought_signature = str(part.thought_signature)
+
                 if getattr(part, "thought", False):
                     reasoning_parts.append(part.text or "")
                 elif part.text:
@@ -185,6 +234,7 @@ class GeminiClient(LLMClient):
         return LLMResponse(
             content="".join(content_parts) if content_parts else None,
             reasoning="\n\n".join(reasoning_parts) if reasoning_parts else None,
+            thought_signature=thought_signature,
             tool_calls=tuple(tool_calls),
             raw=response,
         )
