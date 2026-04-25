@@ -29,6 +29,13 @@ class GeminiClient(LLMClient):
     client: genai.Client
     model: str
 
+    @staticmethod
+    def _supports_thinking(model_name: str) -> bool:
+        """Return whether the model name is expected to support thought summaries."""
+
+        normalized_model = model_name.lower()
+        return "gemini-2.5" in normalized_model or "gemini-3" in normalized_model
+
     def _complete(self, request: LLMRequest) -> LLMResponse:
         """Run one LLM turn through the Gemini API."""
 
@@ -71,32 +78,41 @@ class GeminiClient(LLMClient):
             config_kwargs["response_mime_type"] = "application/json"
             config_kwargs["response_schema"] = request.output_schema
 
-        # Gemini 2.0 Thinking/Reasoning support
-        # Note: Depending on the model, reasoning might be enabled differently.
-        # For gemini-2.0-flash-thinking-preview, it's often automatic.
-        
+        model_name = request.model or self.model
+        if self._supports_thinking(model_name):
+            config_kwargs["thinking_config"] = types.ThinkingConfig(
+                include_thoughts=True
+            )
+
         config = types.GenerateContentConfig(**config_kwargs)
 
         with get_trace().span(
             "llm.gemini.complete",
             {
-                "model": request.model or self.model,
+                "model": model_name,
                 "tool_count": len(request.tools),
+                "thinking_enabled": self._supports_thinking(model_name),
             },
         ) as span:
             response = self.client.models.generate_content(
-                model=request.model or self.model,
+                model=model_name,
                 contents=contents,
                 config=config,
             )
-            
+
             # Trace usage if available
             if response.usage_metadata:
-                span.set_attribute("usage", {
+                usage: dict[str, int | None] = {
                     "prompt_token_count": response.usage_metadata.prompt_token_count,
                     "candidates_token_count": response.usage_metadata.candidates_token_count,
                     "total_token_count": response.usage_metadata.total_token_count,
-                })
+                }
+                thoughts_token_count = getattr(
+                    response.usage_metadata, "thoughts_token_count", None
+                )
+                if isinstance(thoughts_token_count, int):
+                    usage["thoughts_token_count"] = thoughts_token_count
+                span.set_attribute("usage", usage)
 
             result = self.from_provider_response(response)
             if result.reasoning:

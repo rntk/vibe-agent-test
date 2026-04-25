@@ -40,6 +40,9 @@ def test_gemini_complete_basic() -> None:
     assert resp.content == "Hello world"
     assert fake_client.models.payload["contents"][0].parts[0].text == "Hi"
     assert fake_client.models.payload["model"] == "gemini-2.0-flash"
+    assert getattr(
+        fake_client.models.payload["config"], "thinking_config", None
+    ) is None
 
 
 def test_gemini_complete_with_reasoning() -> None:
@@ -63,6 +66,30 @@ def test_gemini_complete_with_reasoning() -> None:
 
     assert resp.content == "Final answer"
     assert resp.reasoning == "Thinking..."
+    assert getattr(
+        fake_client.models.payload["config"], "thinking_config", None
+    ) is None
+
+
+def test_gemini_complete_enables_thinking_for_gemini_3() -> None:
+    candidate = types.Candidate(
+        content=types.Content(
+            role="model",
+            parts=[types.Part(text="Final answer")],
+        )
+    )
+    response = types.GenerateContentResponse(candidates=[candidate])
+
+    fake_client = MagicMock()
+    fake_client.models = FakeGeminiModels(response)
+
+    client = GeminiClient(client=fake_client, model="gemini-3-flash-preview")
+
+    client.complete(user_prompt="Solve this")
+
+    thinking_config = fake_client.models.payload["config"].thinking_config
+    assert thinking_config is not None
+    assert thinking_config.include_thoughts is True
 
 
 def test_gemini_tool_calls() -> None:
