@@ -62,7 +62,17 @@ def _format_checkpoint(
     raw = "\n".join(raw_lines)
 
     try:
-        response = client.complete(raw, system_prompt=_CHECKPOINT_SYSTEM_PROMPT)
+        response = client.complete(
+            raw,
+            system_prompt=_CHECKPOINT_SYSTEM_PROMPT,
+            trace_name="llm.complete.checkpoint_summary",
+            trace_attributes={
+                "llm_purpose": "tool_call_summary",
+                "summary_kind": "checkpoint",
+                "step_count": len(steps),
+                "tool_names": [tool_call.name for tool_call, _ in steps],
+            },
+        )
         summary = (response.content or "").strip()
     except Exception as exc:
         summary = f"(checkpoint summarization failed: {exc})\n{raw}"

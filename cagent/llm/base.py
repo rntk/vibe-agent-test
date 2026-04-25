@@ -210,6 +210,8 @@ class LLMClient(ABC):
         parallel_tool_calls: bool | None = None,
         output_schema: Mapping[str, Any] | None = None,
         reasoning_effort: str | None = None,
+        trace_name: str | None = None,
+        trace_attributes: Mapping[str, Any] | None = None,
     ) -> LLMResponse:
         """Run one provider-neutral LLM turn."""
 
@@ -237,14 +239,17 @@ class LLMClient(ABC):
             reasoning_effort=reasoning_effort,
         )
         all_msgs = request.all_messages()
+        attributes: dict[str, Any] = {
+            "request": request,
+            "all_messages": all_msgs,
+            "message_count": len(all_msgs),
+            "tool_names": [tool.name for tool in tools],
+        }
+        if trace_attributes:
+            attributes.update(trace_attributes)
         with get_trace().span(
-            "llm.complete",
-            {
-                "request": request,
-                "all_messages": all_msgs,
-                "message_count": len(all_msgs),
-                "tool_names": [tool.name for tool in tools],
-            },
+            trace_name or "llm.complete",
+            attributes,
         ) as span:
             response = self._complete(request)
             span.set_attribute("response", response)

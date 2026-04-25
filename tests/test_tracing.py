@@ -119,6 +119,51 @@ def test_write_trace_html_renders_llm_reasoning(tmp_path: Path) -> None:
     assert "Hi there." in html
 
 
+def test_write_trace_html_distinguishes_agent_and_internal_llm_spans(
+    tmp_path: Path,
+) -> None:
+    trace = Trace()
+    output_file = tmp_path / "trace.json"
+
+    with trace.span(
+        "llm.complete.implementation.agent_turn",
+        {
+            "llm_purpose": "agent_turn",
+            "agent_mode": "implementation",
+            "iteration": 3,
+            "history_kind": "implementation_chat_history",
+            "all_messages": [LLMMessage(role="user", content="Main task")],
+            "response": LLMResponse(content="Run a command."),
+            "message_count": 1,
+        },
+    ):
+        pass
+    with trace.span(
+        "llm.complete.checkpoint_summary",
+        {
+            "llm_purpose": "tool_call_summary",
+            "summary_kind": "checkpoint",
+            "all_messages": [LLMMessage(role="user", content="Internal raw tool log")],
+            "response": LLMResponse(content="Internal summary"),
+            "message_count": 1,
+        },
+    ):
+        pass
+    trace.flush(output_file)
+
+    html = write_trace_html(output_file).read_text(encoding="utf-8")
+    conversation_html = html.split("<h2>Span Timeline</h2>", maxsplit=1)[0]
+
+    assert "Main task" in conversation_html
+    assert "Run a command." in conversation_html
+    assert "Internal raw tool log" not in conversation_html
+    assert "Internal summary" not in conversation_html
+    assert "Internal raw tool log" in html
+    assert "Internal summary" in html
+    assert "purpose=agent_turn" in html
+    assert "purpose=tool_call_summary" in html
+
+
 def test_trace_deduplicates_appended_message_history() -> None:
     trace = Trace()
     first_message = LLMMessage(role="user", content="first prompt")

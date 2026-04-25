@@ -70,6 +70,13 @@ def run_plan_mode(file_path: str, bash_advisor: str = "off") -> None:
             user_prompt,
             tools=PLAN_TOOLS,
             messages=messages,
+            trace_name="llm.complete.plan.agent_turn",
+            trace_attributes={
+                "llm_purpose": "agent_turn",
+                "agent_mode": "plan",
+                "iteration": iteration,
+                "history_kind": "plan_chat_history",
+            },
         )
 
         if response.tool_calls:
@@ -174,6 +181,13 @@ def run_implementation_mode(file_path: str, bash_advisor: str = "off") -> None:
             system_prompt=system_prompt,
             tools=IMPLEMENTATION_TOOLS,
             messages=messages,
+            trace_name="llm.complete.implementation.agent_turn",
+            trace_attributes={
+                "llm_purpose": "agent_turn",
+                "agent_mode": "implementation",
+                "iteration": iteration,
+                "history_kind": "implementation_chat_history",
+            },
         )
 
         if response.tool_calls:

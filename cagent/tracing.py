@@ -435,11 +435,10 @@ def _conversation_events(
     displayed_message_count = 0
 
     for span in spans:
-        if span.get("name") != "llm.complete":
-            continue
-
         attributes = _resolve_trace_refs(span.get("attributes", {}), value_refs)
         if not isinstance(attributes, Mapping):
+            continue
+        if not _is_conversation_span(span, attributes):
             continue
 
         messages = attributes.get("all_messages", [])
@@ -456,6 +455,18 @@ def _conversation_events(
             displayed_message_count += 1
 
     return events
+
+
+def _is_conversation_span(
+    span: Mapping[str, Any],
+    attributes: Mapping[str, Any],
+) -> bool:
+    name = span.get("name")
+    if name == "llm.complete":
+        return True
+    if not isinstance(name, str) or not name.startswith("llm.complete."):
+        return False
+    return attributes.get("llm_purpose") == "agent_turn"
 
 
 def _response_to_message(response: Any) -> dict[str, Any] | None:
@@ -549,6 +560,18 @@ def _span_attribute_summary(attributes: Any) -> str:
     if not isinstance(attributes, Mapping):
         return ""
     parts: list[str] = []
+    llm_purpose = attributes.get("llm_purpose")
+    if llm_purpose:
+        parts.append(f"purpose={llm_purpose}")
+    agent_mode = attributes.get("agent_mode")
+    if agent_mode:
+        parts.append(f"mode={agent_mode}")
+    iteration = attributes.get("iteration")
+    if isinstance(iteration, int):
+        parts.append(f"iteration={iteration}")
+    history_kind = attributes.get("history_kind")
+    if history_kind:
+        parts.append(f"history={history_kind}")
     tool_name = attributes.get("tool_name")
     if tool_name:
         parts.append(f"tool={tool_name}")

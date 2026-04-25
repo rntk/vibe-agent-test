@@ -107,6 +107,12 @@ def request_advice(
         response = client.complete(
             prompt,
             system_prompt=ADVISOR_SYSTEM_PROMPT,
+            trace_name="llm.complete.tool_failure_advice",
+            trace_attributes={
+                "llm_purpose": "tool_failure_advice",
+                "tool_name": advisor_input.tool_name,
+                "exit_code": advisor_input.exit_code,
+            },
         )
         content = (response.content or "").strip()
         advice = _parse_advice(content)
@@ -140,6 +146,11 @@ def request_precheck(
         response = client.complete(
             prompt,
             system_prompt=PRECHECK_SYSTEM_PROMPT,
+            trace_name="llm.complete.bash_precheck",
+            trace_attributes={
+                "llm_purpose": "bash_precheck",
+                "tool_name": BASH_TOOL.name,
+            },
         )
         content = (response.content or "").strip()
         advice = _parse_advice(content)
@@ -260,6 +271,13 @@ def request_edit_precheck(
                 system_prompt=EDIT_PRECHECK_SYSTEM_PROMPT,
                 tools=(BASH_TOOL,),
                 messages=tuple(messages),
+                trace_name="llm.complete.edit_precheck",
+                trace_attributes={
+                    "llm_purpose": "edit_precheck",
+                    "reviewed_tool_name": tool_call.name,
+                    "reviewed_tool_arguments": tool_call.arguments,
+                    "iteration": iteration,
+                },
             )
 
             if not response.tool_calls:

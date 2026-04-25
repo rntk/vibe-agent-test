@@ -255,6 +255,10 @@ def advisor(prompt: str, client: LLMClient | None) -> ToolResult:
         response = client.complete(
             prompt,
             system_prompt=ADVISOR_TOOL_SYSTEM_PROMPT,
+            trace_name="llm.complete.advisor_tool",
+            trace_attributes={
+                "llm_purpose": "advisor_tool",
+            },
         )
         content = (response.content or "").strip()
         output = content or "Advisor returned no guidance."
