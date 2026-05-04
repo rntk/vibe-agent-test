@@ -214,7 +214,7 @@ def test_run_implementation_mode_exits_when_no_client_configured(
     prompt_file.write_text("Implement something.", encoding="utf-8")
 
     with (
-        patch("cagent.main.create_fast_api_client", return_value=None),
+        patch("cagent.modes.create_fast_api_client", return_value=None),
         pytest.raises(SystemExit) as exc_info,
     ):
         run_implementation_mode(str(prompt_file))
@@ -297,7 +297,7 @@ def test_main_writes_trace_to_non_empty_trace_path(
     with (
         patch("sys.argv", ["cagent", "--trace", str(trace_file)]),
         patch("cagent.main.create_smart_api_client", return_value=None),
-        patch("cagent.main.create_fast_api_client", return_value=None),
+        patch("cagent.cli.create_fast_api_client", return_value=None),
     ):
         main()
 
@@ -320,7 +320,7 @@ def test_main_does_not_write_trace_for_empty_trace_path(
     with (
         patch("sys.argv", ["cagent", "--trace", ""]),
         patch("cagent.main.create_smart_api_client", return_value=None),
-        patch("cagent.main.create_fast_api_client", return_value=None),
+        patch("cagent.cli.create_fast_api_client", return_value=None),
         patch("pathlib.Path.write_text") as write_text,
     ):
         main()
