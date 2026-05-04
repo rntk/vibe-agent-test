@@ -374,6 +374,62 @@ def test_llamacpp_adapter_serializes_tool_calls_and_results() -> None:
     ]
 
 
+def test_openai_adapter_serializes_assistant_reasoning_content() -> None:
+    messages = [
+        LLMMessage(
+            role="assistant",
+            content="I need to inspect the docs.",
+            reasoning="I need to inspect the docs.",
+        ),
+    ]
+
+    provider_messages = OpenAIChatCompletionsClient.to_provider_messages(messages)
+
+    assert provider_messages == [
+        {
+            "role": "assistant",
+            "content": "I need to inspect the docs.",
+            "reasoning_content": "I need to inspect the docs.",
+        },
+    ]
+
+
+def test_openai_adapter_serializes_reasoning_content_with_tool_calls() -> None:
+    tool_call = ToolCall(
+        id="call_1",
+        name="search_docs",
+        arguments={"query": "llm adapters"},
+    )
+    messages = [
+        LLMMessage(
+            role="assistant",
+            content=None,
+            reasoning="I need to inspect the docs.",
+            tool_calls=[tool_call],
+        ),
+    ]
+
+    provider_messages = OpenAIChatCompletionsClient.to_provider_messages(messages)
+
+    assert provider_messages == [
+        {
+            "role": "assistant",
+            "content": None,
+            "reasoning_content": "I need to inspect the docs.",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "search_docs",
+                        "arguments": '{"query": "llm adapters"}',
+                    },
+                }
+            ],
+        },
+    ]
+
+
 def test_llamacpp_adapter_serializes_assistant_reasoning_content() -> None:
     messages = [
         LLMMessage(

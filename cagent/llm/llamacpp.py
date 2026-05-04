@@ -56,6 +56,7 @@ class LLamaCPP(LLMClient):
         stop: list[str] | None = None,
         provider_name: str = "LlamaCPP",
         provider_key: str = "llamacpp",
+        deepseek_thinking: bool = False,
     ) -> None:
         super().__init__()
         u = urlparse(host)
@@ -76,6 +77,7 @@ class LLamaCPP(LLMClient):
         self.__provider_key = provider_key
         self.__max_retries = max_retries
         self.__retry_delay = retry_delay
+        self.__deepseek_thinking = deepseek_thinking
 
     @property
     def provider_name(self) -> str:
@@ -241,6 +243,7 @@ class LLamaCPP(LLMClient):
         messages: Sequence[LLMMessage],
         temperature: float,
         tools: Sequence[ToolDefinition] = (),
+        reasoning_effort: str | None = None,
     ) -> LLMResponse:
         """Single attempt to call the LLM without retry logic."""
         conn = self.get_connection()
@@ -263,6 +266,10 @@ class LLamaCPP(LLMClient):
             }
             if tools:
                 payload["tools"] = self.to_provider_tools(tools)
+            if reasoning_effort is not None:
+                payload["reasoning_effort"] = reasoning_effort
+            if self.__deepseek_thinking:
+                payload["thinking"] = {"type": "enabled"}
 
             body = json.dumps(payload)
             headers = {"Content-type": "application/json"}
@@ -401,6 +408,7 @@ class LLamaCPP(LLMClient):
                     messages=request.all_messages(),
                     temperature=temperature,
                     tools=request.tools,
+                    reasoning_effort=request.reasoning_effort,
                 )
             except EmptyResponseError as e:
                 last_error = e

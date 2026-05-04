@@ -44,6 +44,7 @@ class OpenAIChatCompletionsClient(LLMClient):
 
     client: openai.OpenAI
     default_model: str
+    deepseek_thinking: bool = False
 
     @classmethod
     def from_config(
@@ -52,6 +53,7 @@ class OpenAIChatCompletionsClient(LLMClient):
         api_key: str,
         base_url: str | None = None,
         default_model: str = "gpt-4o",
+        deepseek_thinking: bool = False,
     ) -> OpenAIChatCompletionsClient:
         """Create a client from configuration values."""
 
@@ -61,6 +63,7 @@ class OpenAIChatCompletionsClient(LLMClient):
                 base_url=base_url,
             ),
             default_model=default_model,
+            deepseek_thinking=deepseek_thinking,
         )
 
     def _complete(self, request: LLMRequest) -> LLMResponse:
@@ -76,10 +79,13 @@ class OpenAIChatCompletionsClient(LLMClient):
             payload["tool_choice"] = request.tool_choice
         if request.parallel_tool_calls is not None:
             payload["parallel_tool_calls"] = request.parallel_tool_calls
-        if request.temperature is not None:
+        if request.temperature is not None and not self.deepseek_thinking:
+            # DeepSeek thinking mode ignores temperature; omit to keep payload clean.
             payload["temperature"] = request.temperature
         if request.reasoning_effort is not None:
             payload["reasoning_effort"] = request.reasoning_effort
+        if self.deepseek_thinking:
+            payload["extra_body"] = {"thinking": {"type": "enabled"}}
 
         completion = self.client.chat.completions.create(**payload)
         return self.from_provider_response(completion)
@@ -97,6 +103,8 @@ class OpenAIChatCompletionsClient(LLMClient):
         """Convert one provider-neutral message to an OpenAI chat message."""
 
         output: dict[str, Any] = {"role": message.role, "content": message.content}
+        if message.role == "assistant" and message.reasoning:
+            output["reasoning_content"] = message.reasoning
         if message.role == "tool":
             output["tool_call_id"] = message.tool_call_id
         if message.tool_calls:
