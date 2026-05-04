@@ -308,6 +308,8 @@ def request_edit_precheck(
                     role="assistant",
                     content=response.content,
                     tool_calls=tuple(normalized),
+                    reasoning=response.reasoning,
+                    thought_signature=response.thought_signature,
                 )
             )
             for tc in normalized:
