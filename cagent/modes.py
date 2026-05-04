@@ -37,7 +37,11 @@ def _tool_calls_with_ids(
     return tuple(normalized_tool_calls)
 
 
-def run_plan_mode(file_path: str, bash_advisor: str = "off") -> None:
+def run_plan_mode(
+    file_path: str,
+    bash_advisor: str = "off",
+    tool_summary: bool = False,
+) -> None:
     """Run planning mode using FAST_API and save the result."""
     fast_client = create_fast_api_client()
     if fast_client is None:
@@ -122,7 +126,12 @@ def run_plan_mode(file_path: str, bash_advisor: str = "off") -> None:
                 )
                 steps.append((tool_call, content))
                 messages = list(compact_history(messages))
-            next_user_prompt = _format_checkpoint(fast_client, response.content, steps)
+            if tool_summary:
+                next_user_prompt = _format_checkpoint(
+                    fast_client, response.content, steps
+                )
+            else:
+                next_user_prompt = ""
         else:
             plans_dir = Path("plans")
             plans_dir.mkdir(parents=True, exist_ok=True)
@@ -141,7 +150,11 @@ def run_plan_mode(file_path: str, bash_advisor: str = "off") -> None:
     sys.exit(1)
 
 
-def run_implementation_mode(file_path: str, bash_advisor: str = "off") -> None:
+def run_implementation_mode(
+    file_path: str,
+    bash_advisor: str = "off",
+    tool_summary: bool = False,
+) -> None:
     """Run implementation mode using FAST_API with read, bash, and write tools."""
     fast_client = create_fast_api_client()
     if fast_client is None:
@@ -233,7 +246,12 @@ def run_implementation_mode(file_path: str, bash_advisor: str = "off") -> None:
                 )
                 steps.append((tool_call, content))
                 messages = list(compact_history(messages))
-            next_user_prompt = _format_checkpoint(fast_client, response.content, steps)
+            if tool_summary:
+                next_user_prompt = _format_checkpoint(
+                    fast_client, response.content, steps
+                )
+            else:
+                next_user_prompt = ""
         else:
             print(response.content or "")
             return

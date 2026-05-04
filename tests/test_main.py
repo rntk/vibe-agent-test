@@ -139,6 +139,74 @@ def test_run_implementation_mode_passes_advisor_tool_to_smart_api(
     assert tool_messages[0].content == "Prefer the existing helper."
 
 
+def test_run_implementation_mode_skips_summary_by_default(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    prompt_file = tmp_path / "prompt.md"
+    prompt_file.write_text("Write a file.", encoding="utf-8")
+
+    responses = [
+        LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCall(
+                    id="call_1",
+                    name="write_file",
+                    arguments={"path": str(tmp_path / "output.txt"), "content": "hello"},
+                )
+            ],
+        ),
+        LLMResponse(content="File written successfully."),
+    ]
+    client = FakeLLMClient(responses)
+
+    with (
+        patch("cagent.modes.create_fast_api_client", return_value=client),
+        patch("cagent.modes.create_smart_api_client", return_value=None),
+        patch("cagent.modes._format_checkpoint") as mock_checkpoint,
+    ):
+        run_implementation_mode(str(prompt_file))
+
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "File written successfully."
+    mock_checkpoint.assert_not_called()
+
+
+def test_run_implementation_mode_uses_summary_when_enabled(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    prompt_file = tmp_path / "prompt.md"
+    prompt_file.write_text("Write a file.", encoding="utf-8")
+
+    responses = [
+        LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCall(
+                    id="call_1",
+                    name="write_file",
+                    arguments={"path": str(tmp_path / "output.txt"), "content": "hello"},
+                )
+            ],
+        ),
+        LLMResponse(content="File written successfully."),
+    ]
+    client = FakeLLMClient(responses)
+
+    with (
+        patch("cagent.modes.create_fast_api_client", return_value=client),
+        patch("cagent.modes.create_smart_api_client", return_value=None),
+        patch("cagent.modes._format_checkpoint", return_value="checkpoint") as mock_checkpoint,
+    ):
+        run_implementation_mode(str(prompt_file), tool_summary=True)
+
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "File written successfully."
+    mock_checkpoint.assert_called_once()
+
+
 def test_run_implementation_mode_exits_when_no_client_configured(
     tmp_path: Path,
 ) -> None:

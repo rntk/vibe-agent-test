@@ -39,6 +39,12 @@ def main() -> None:
         default="off",
         help="Bash command pre-execution advisor model (off, fast, or smart)",
     )
+    parser.add_argument(
+        "--tool-summary",
+        action="store_true",
+        default=False,
+        help="Enable LLM summarization of tool call steps (disabled by default)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -52,6 +58,10 @@ def main() -> None:
         logging.info("Bash advisor disabled")
     else:
         logging.info("Bash advisor enabled: %s", args.bash_advisor)
+    if args.tool_summary:
+        logging.info("Tool summary enabled")
+    else:
+        logging.info("Tool summary disabled")
 
     if args.trace is not None:
         trace = Trace()
@@ -83,11 +93,19 @@ def _run_args(args: argparse.Namespace) -> None:
     """Run the CLI mode selected by parsed arguments."""
 
     if args.plan:
-        run_plan_mode(args.plan, bash_advisor=args.bash_advisor)
+        run_plan_mode(
+            args.plan,
+            bash_advisor=args.bash_advisor,
+            tool_summary=args.tool_summary,
+        )
         return
 
     if args.implementation:
-        run_implementation_mode(args.implementation, bash_advisor=args.bash_advisor)
+        run_implementation_mode(
+            args.implementation,
+            bash_advisor=args.bash_advisor,
+            tool_summary=args.tool_summary,
+        )
         return
 
     fast_client = create_fast_api_client()
