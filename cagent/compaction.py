@@ -43,6 +43,12 @@ def compact_history(
     pairs_before = _tool_result_pairs(original)
     stats_before = _history_stats(original, pairs_before)
 
+    # Collect tool_call_ids that are already tombstoned from previous passes.
+    tombstoned_call_ids: set[str] = set()
+    for p in pairs_before:
+        if _is_tombstone(p.result.content):
+            tombstoned_call_ids.add(p.call.id)
+
     with get_trace().span(
         "compaction.run",
         {
@@ -67,9 +73,7 @@ def compact_history(
                 continue
             if _is_tombstone(pair.result.content):
                 continue
-            superseder = _find_superseder(
-                i, pairs, signatures, similarity_threshold
-            )
+            superseder = _find_superseder(i, pairs, signatures, similarity_threshold)
             if superseder is None:
                 continue
             savings = len(pair.result.content or "") - _tombstone_size(pair.call)
@@ -89,6 +93,26 @@ def compact_history(
             _record_noop(span, stats_before, "no_duplicates", triggered=True)
             return original
 
+        # Determine which assistant messages should have reasoning stripped.
+        # The signed reasoning chain is broken once any result for one of the
+        # assistant's tool calls is tombstoned, so the signature must go too.
+        folded_call_ids = {fold.call.id for fold in folds if fold.call.id}
+        assistant_indices_to_strip_reasoning: set[int] = set()
+        for idx, m in enumerate(original):
+            if (
+                m.role == "assistant"
+                and (m.reasoning is not None or m.thought_signature is not None)
+                and m.tool_calls
+            ):
+                ids = [tc.id for tc in m.tool_calls if tc.id]
+                if not ids:
+                    continue
+                if any(
+                    tc_id in folded_call_ids or tc_id in tombstoned_call_ids
+                    for tc_id in ids
+                ):
+                    assistant_indices_to_strip_reasoning.add(idx)
+
         folded_messages = list(original)
         for fold in folds:
             old = folded_messages[fold.index]
@@ -98,6 +122,18 @@ def compact_history(
                 tool_calls=old.tool_calls,
                 tool_call_id=old.tool_call_id,
                 reasoning=old.reasoning,
+            )
+
+        # Strip reasoning and the signature bound to it.
+        for idx in assistant_indices_to_strip_reasoning:
+            old = folded_messages[idx]
+            folded_messages[idx] = LLMMessage(
+                role=old.role,
+                content=old.content,
+                tool_calls=old.tool_calls,
+                tool_call_id=old.tool_call_id,
+                reasoning=None,
+                thought_signature=None,
             )
 
         result = tuple(folded_messages)
@@ -122,9 +158,7 @@ def compact_history(
                     "superseded_by_index": fold.superseded_by_index,
                     "match_mode": fold.match_mode,
                     "similarity": round(fold.similarity, 3),
-                    "bytes_before": len(
-                        original[fold.index].content or ""
-                    ),
+                    "bytes_before": len(original[fold.index].content or ""),
                     "bytes_after": len(
                         _tombstone_text(fold.call, fold.superseded_by_index)
                     ),
@@ -139,8 +173,7 @@ def compact_history(
                 "bytes_saved": bytes_saved,
                 "bytes_saved_pct": saved_pct,
                 "tombstones_added": (
-                    stats_after["tombstone_count"]
-                    - stats_before["tombstone_count"]
+                    stats_after["tombstone_count"] - stats_before["tombstone_count"]
                 ),
                 "active_tool_results_removed": (
                     stats_before["active_tool_result_count"]
@@ -214,6 +247,8 @@ def _tool_result_pairs(messages: Sequence[LLMMessage]) -> list[_Pair]:
 
 def _protected_tool_call_ids(pairs: Sequence[_Pair], keep_recent: int) -> set[str]:
     protected: set[str] = set()
+    if keep_recent <= 0:
+        return protected
     for pair in list(pairs)[-keep_recent:]:
         if pair.call.id:
             protected.add(pair.call.id)
@@ -297,9 +332,7 @@ def _history_stats(
     messages: Sequence[LLMMessage],
     pairs: Sequence[_Pair],
 ) -> dict[str, int]:
-    tombstone_count = sum(
-        1 for p in pairs if _is_tombstone(p.result.content)
-    )
+    tombstone_count = sum(1 for p in pairs if _is_tombstone(p.result.content))
     tool_result_bytes = sum(len(p.result.content or "") for p in pairs)
     active_tool_result_bytes = sum(
         len(p.result.content or "")
@@ -351,9 +384,7 @@ def _history_bytes(messages: Sequence[LLMMessage]) -> int:
             total += len(message.reasoning)
         for call in message.tool_calls:
             total += len(call.name)
-            total += len(
-                json.dumps(_jsonable(call.arguments), separators=(",", ":"))
-            )
+            total += len(json.dumps(_jsonable(call.arguments), separators=(",", ":")))
     return total
 
 
