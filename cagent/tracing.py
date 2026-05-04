@@ -10,7 +10,6 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field, is_dataclass
-from hashlib import sha256
 from html import escape
 from pathlib import Path
 from typing import Any, Protocol
@@ -86,9 +85,6 @@ class Trace:
     def __init__(self) -> None:
         self.roots: list[SpanRecord] = []
         self.spans: list[SpanRecord] = []
-        self._value_refs: dict[str, str] = {}
-        self._values_by_ref: dict[str, Any] = {}
-        self._next_value_ref = 1
 
     @contextmanager
     def span(
@@ -131,14 +127,6 @@ class Trace:
 
         return {
             "span_count": len(self.spans),
-            "deduplication": {
-                "value_count": len(self._value_refs),
-                "values": self._values_by_ref,
-                "ref_format": (
-                    "Duplicate attribute values are replaced by "
-                    "{'$ref': 'trace_value_N', '$deduplicated': true}."
-                ),
-            },
             "spans": [_span_to_dict(span) for span in self.roots],
         }
 
@@ -158,42 +146,14 @@ class Trace:
             output_path.write_text(rendered + "\n", encoding="utf-8")
 
     def to_trace_dict(self, values: Mapping[str, Any]) -> dict[str, Any]:
-        """Return trace attributes with repeated container values tombstoned."""
+        """Return JSON-safe trace attributes without changing their shape."""
 
         return {key: self.to_trace_value(value) for key, value in values.items()}
 
     def to_trace_value(self, value: Any) -> Any:
-        """Return a JSON-safe trace value, replacing duplicates with references."""
+        """Return a JSON-safe trace value."""
 
-        return self._deduplicate_value(_to_jsonable(value))
-
-    def _deduplicate_value(self, value: Any) -> Any:
-        if isinstance(value, Mapping):
-            deduped_mapping = {
-                str(key): self._deduplicate_value(item) for key, item in value.items()
-            }
-            return self._deduplicate_container(deduped_mapping)
-        if isinstance(value, list):
-            deduped_list = [self._deduplicate_value(item) for item in value]
-            return self._deduplicate_container(deduped_list)
-        return value
-
-    def _deduplicate_container(self, value: dict[str, Any] | list[Any]) -> Any:
-        if not value:
-            return value
-
-        fingerprint = _trace_value_fingerprint(value)
-        if fingerprint in self._value_refs:
-            return {
-                "$ref": self._value_refs[fingerprint],
-                "$deduplicated": True,
-            }
-
-        ref = f"trace_value_{self._next_value_ref}"
-        self._next_value_ref += 1
-        self._value_refs[fingerprint] = ref
-        self._values_by_ref[ref] = value
-        return value
+        return _to_jsonable(value)
 
 
 def write_trace_html(
@@ -203,8 +163,8 @@ def write_trace_html(
     """Render a readable HTML conversation view for a JSON trace file."""
 
     trace_path = Path(trace_file_path)
-    output_path = Path(html_file_path) if html_file_path else trace_path.with_suffix(
-        ".html"
+    output_path = (
+        Path(html_file_path) if html_file_path else trace_path.with_suffix(".html")
     )
     trace_data = json.loads(trace_path.read_text(encoding="utf-8"))
     html = render_trace_html(trace_data, trace_path.name)
@@ -216,9 +176,9 @@ def write_trace_html(
 def render_trace_html(trace_data: Mapping[str, Any], trace_name: str = "trace") -> str:
     """Return a standalone HTML page for a trace document."""
 
-    value_refs = _trace_value_refs(trace_data)
     spans = _flatten_spans(trace_data.get("spans", []))
-    conversation = _conversation_events(spans, value_refs)
+    report_spans = _deduplicate_report_spans(spans)
+    conversation = _conversation_events(spans)
     span_count = trace_data.get("span_count", len(spans))
 
     conversation_html = "\n".join(
@@ -230,7 +190,7 @@ def render_trace_html(trace_data: Mapping[str, Any], trace_name: str = "trace") 
             "trace.</p>"
         )
 
-    timeline_html = "\n".join(_render_span_summary(span, value_refs) for span in spans)
+    timeline_html = "\n".join(_render_span_summary(span) for span in report_spans)
     if not timeline_html:
         timeline_html = '<p class="empty">No spans were found in this trace.</p>'
 
@@ -387,32 +347,6 @@ def reset_trace(token: Token[Trace | NoOpTrace]) -> None:
     _CURRENT_TRACE.reset(token)
 
 
-def _trace_value_refs(trace_data: Mapping[str, Any]) -> Mapping[str, Any]:
-    deduplication = trace_data.get("deduplication")
-    if not isinstance(deduplication, Mapping):
-        return {}
-    values = deduplication.get("values")
-    if not isinstance(values, Mapping):
-        return {}
-    return values
-
-
-def _resolve_trace_refs(value: Any, value_refs: Mapping[str, Any]) -> Any:
-    if isinstance(value, Mapping):
-        ref = value.get("$ref")
-        if value.get("$deduplicated") is True and isinstance(ref, str):
-            resolved = value_refs.get(ref)
-            if resolved is not None:
-                return _resolve_trace_refs(resolved, value_refs)
-        return {
-            str(key): _resolve_trace_refs(item, value_refs)
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_resolve_trace_refs(item, value_refs) for item in value]
-    return value
-
-
 def _flatten_spans(spans: Any) -> list[dict[str, Any]]:
     flattened: list[dict[str, Any]] = []
     if not isinstance(spans, list):
@@ -427,15 +361,85 @@ def _flatten_spans(spans: Any) -> list[dict[str, Any]]:
     return sorted(flattened, key=lambda item: item.get("started_at") or 0)
 
 
+def _deduplicate_report_spans(
+    spans: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return spans with repeated containers compacted for HTML rendering only."""
+
+    seen: dict[str, str] = {}
+    next_ref = 1
+    deduplicated_spans: list[dict[str, Any]] = []
+
+    for span in spans:
+        span_dict = dict(span)
+        attributes = span.get("attributes", {})
+        if isinstance(attributes, Mapping):
+            attributes, next_ref = _deduplicate_report_value(
+                attributes,
+                seen,
+                next_ref,
+            )
+        span_dict["attributes"] = attributes
+        deduplicated_spans.append(span_dict)
+
+    return deduplicated_spans
+
+
+def _deduplicate_report_value(
+    value: Any,
+    seen: dict[str, str],
+    next_ref: int,
+) -> tuple[Any, int]:
+    if isinstance(value, Mapping):
+        deduplicated_mapping: dict[str, Any] = {}
+        for key, item in value.items():
+            deduplicated_item, next_ref = _deduplicate_report_value(
+                item, seen, next_ref
+            )
+            deduplicated_mapping[str(key)] = deduplicated_item
+        return _deduplicate_report_container(
+            deduplicated_mapping,
+            seen,
+            next_ref,
+        )
+
+    if isinstance(value, list):
+        deduplicated_list: list[Any] = []
+        for item in value:
+            deduplicated_item, next_ref = _deduplicate_report_value(
+                item, seen, next_ref
+            )
+            deduplicated_list.append(deduplicated_item)
+        return _deduplicate_report_container(deduplicated_list, seen, next_ref)
+
+    return value, next_ref
+
+
+def _deduplicate_report_container(
+    value: dict[str, Any] | list[Any],
+    seen: dict[str, str],
+    next_ref: int,
+) -> tuple[Any, int]:
+    if not value:
+        return value, next_ref
+
+    fingerprint = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    if fingerprint in seen:
+        return {"$ref": seen[fingerprint], "$deduplicated_for_report": True}, next_ref
+
+    ref = f"trace_value_{next_ref}"
+    seen[fingerprint] = ref
+    return value, next_ref + 1
+
+
 def _conversation_events(
     spans: Sequence[Mapping[str, Any]],
-    value_refs: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     displayed_message_count = 0
 
     for span in spans:
-        attributes = _resolve_trace_refs(span.get("attributes", {}), value_refs)
+        attributes = span.get("attributes", {})
         if not isinstance(attributes, Mapping):
             continue
         if not _is_conversation_span(span, attributes):
@@ -530,13 +534,12 @@ def _render_conversation_event(event: Mapping[str, Any]) -> str:
 
 def _render_span_summary(
     span: Mapping[str, Any],
-    value_refs: Mapping[str, Any],
 ) -> str:
     name = str(span.get("name") or "span")
     status = str(span.get("status") or "ok")
     duration = span.get("duration_ms")
     duration_text = f"{duration:.1f} ms" if isinstance(duration, int | float) else ""
-    attributes = _resolve_trace_refs(span.get("attributes", {}), value_refs)
+    attributes = span.get("attributes", {})
     summary = _span_attribute_summary(attributes)
     status_class = " error" if status == "error" else ""
     error_html = ""
@@ -605,11 +608,6 @@ def _span_to_dict(span: SpanRecord) -> dict[str, Any]:
         "error": span.error,
         "children": [_span_to_dict(child) for child in span.children],
     }
-
-
-def _trace_value_fingerprint(value: dict[str, Any] | list[Any]) -> str:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":"))
-    return sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _to_jsonable(value: Any) -> Any:

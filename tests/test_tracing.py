@@ -31,6 +31,7 @@ def test_trace_collects_nested_llm_and_tool_spans(tmp_path: Path) -> None:
 
     assert response.content == "response to prompt"
     expected_tool_result = "exit_code: 0\nstdout:\nhello\n"
+    assert tool_result == expected_tool_result
     assert len(trace.roots) == 1
     assert [child.name for child in trace.roots[0].children] == [
         "llm.complete",
@@ -164,7 +165,7 @@ def test_write_trace_html_distinguishes_agent_and_internal_llm_spans(
     assert "purpose=tool_call_summary" in html
 
 
-def test_trace_deduplicates_appended_message_history() -> None:
+def test_trace_stores_appended_message_history_as_is() -> None:
     trace = Trace()
     first_message = LLMMessage(role="user", content="first prompt")
     second_message = LLMMessage(role="assistant", content="first answer")
@@ -183,7 +184,30 @@ def test_trace_deduplicates_appended_message_history() -> None:
 
     assert first_messages[0]["content"] == "first prompt"
     assert first_messages[1]["content"] == "first answer"
-    assert second_messages[0]["$deduplicated"] is True
-    assert second_messages[1]["$deduplicated"] is True
-    assert second_messages[0]["$ref"] != second_messages[1]["$ref"]
+    assert second_messages[0]["content"] == "first prompt"
+    assert second_messages[1]["content"] == "first answer"
     assert second_messages[2]["content"] == "continue"
+
+
+def test_write_trace_html_deduplicates_appended_message_history(
+    tmp_path: Path,
+) -> None:
+    trace = Trace()
+    output_file = tmp_path / "trace.json"
+    first_message = LLMMessage(role="user", content="first prompt")
+    second_message = LLMMessage(role="assistant", content="first answer")
+    third_message = LLMMessage(role="user", content="continue")
+
+    with trace.span("first", {"all_messages": [first_message, second_message]}):
+        pass
+    with trace.span(
+        "second",
+        {"all_messages": [first_message, second_message, third_message]},
+    ):
+        pass
+    trace.flush(output_file)
+
+    html = write_trace_html(output_file).read_text(encoding="utf-8")
+
+    assert "&quot;$deduplicated_for_report&quot;: true" in html
+    assert '"$deduplicated"' not in output_file.read_text(encoding="utf-8")
