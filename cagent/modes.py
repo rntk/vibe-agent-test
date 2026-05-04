@@ -83,6 +83,7 @@ def run_plan_mode(
                 "agent_mode": "plan",
                 "iteration": iteration,
                 "history_kind": "plan_chat_history",
+                "span_context": "agent",
             },
         )
 
@@ -203,6 +204,7 @@ def run_implementation_mode(
                 "agent_mode": "implementation",
                 "iteration": iteration,
                 "history_kind": "implementation_chat_history",
+                "span_context": "agent",
             },
         )
 

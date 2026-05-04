@@ -102,6 +102,7 @@ def request_advice(
             "tool_name": advisor_input.tool_name,
             "command": advisor_input.command,
             "exit_code": advisor_input.exit_code,
+            "span_context": "advisor",
         },
     ) as span:
         response = client.complete(
@@ -112,6 +113,7 @@ def request_advice(
                 "llm_purpose": "tool_failure_advice",
                 "tool_name": advisor_input.tool_name,
                 "exit_code": advisor_input.exit_code,
+                "span_context": "advisor",
             },
         )
         content = (response.content or "").strip()
@@ -141,7 +143,7 @@ def request_precheck(
     prompt = f"Command:\n{command}\n"
     with get_trace().span(
         "advisor.precheck",
-        {"tool_name": BASH_TOOL.name, "command": command},
+        {"tool_name": BASH_TOOL.name, "command": command, "span_context": "advisor"},
     ) as span:
         response = client.complete(
             prompt,
@@ -150,6 +152,7 @@ def request_precheck(
             trace_attributes={
                 "llm_purpose": "bash_precheck",
                 "tool_name": BASH_TOOL.name,
+                "span_context": "advisor",
             },
         )
         content = (response.content or "").strip()
@@ -256,6 +259,7 @@ def request_edit_precheck(
             "arguments": tool_call.arguments,
             "max_iterations": max_iterations,
             "time_budget_seconds": time_budget_seconds,
+            "span_context": "advisor",
         },
     ) as span:
         for iteration in range(max_iterations):
@@ -277,6 +281,7 @@ def request_edit_precheck(
                     "reviewed_tool_name": tool_call.name,
                     "reviewed_tool_arguments": tool_call.arguments,
                     "iteration": iteration,
+                    "span_context": "advisor",
                 },
             )
 

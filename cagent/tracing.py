@@ -213,6 +213,12 @@ def render_trace_html(trace_data: Mapping[str, Any], trace_name: str = "trace") 
       --assistant: #334155;
       --tool: #9a3412;
       --error: #b42318;
+      --ctx-agent: #0f766e;
+      --ctx-advisor: #7c3aed;
+      --ctx-advisor_tool: #a21caf;
+      --ctx-tool: #9a3412;
+      --ctx-compaction: #0369a1;
+      --ctx-summary: #64748b;
     }}
     * {{ box-sizing: border-box; }}
     body {{
@@ -259,6 +265,22 @@ def render_trace_html(trace_data: Mapping[str, Any], trace_name: str = "trace") 
     .message.user {{ border-color: var(--user); }}
     .message.assistant {{ border-color: var(--assistant); }}
     .message.tool {{ border-color: var(--tool); }}
+    .context-badge {{
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+      padding: 1px 6px;
+      border-radius: 3px;
+      margin-left: 6px;
+    }}
+    .context-badge.agent {{ background: var(--ctx-agent); color: #fff; }}
+    .context-badge.advisor {{ background: var(--ctx-advisor); color: #fff; }}
+    .context-badge.advisor_tool {{ background: var(--ctx-advisor_tool); color: #fff; }}
+    .context-badge.tool {{ background: var(--ctx-tool); color: #fff; }}
+    .context-badge.compaction {{ background: var(--ctx-compaction); color: #fff; }}
+    .context-badge.summary {{ background: var(--ctx-summary); color: #fff; }}
     .role {{
       color: var(--muted);
       display: flex;
@@ -292,6 +314,12 @@ def render_trace_html(trace_data: Mapping[str, Any], trace_name: str = "trace") 
       padding: 10px;
     }}
     .span.error {{ border-color: var(--error); }}
+    .span.context-agent {{ border-left: 4px solid var(--ctx-agent); }}
+    .span.context-advisor {{ border-left: 4px solid var(--ctx-advisor); }}
+    .span.context-advisor_tool {{ border-left: 4px solid var(--ctx-advisor_tool); }}
+    .span.context-tool {{ border-left: 4px solid var(--ctx-tool); }}
+    .span.context-compaction {{ border-left: 4px solid var(--ctx-compaction); }}
+    .span.context-summary {{ border-left: 4px solid var(--ctx-summary); }}
     .span-title {{
       display: flex;
       justify-content: space-between;
@@ -445,16 +473,23 @@ def _conversation_events(
         if not _is_conversation_span(span, attributes):
             continue
 
+        span_context = attributes.get("span_context", "")
+
         messages = attributes.get("all_messages", [])
         if isinstance(messages, list):
             for message in messages[displayed_message_count:]:
                 if isinstance(message, Mapping):
-                    events.append(dict(message))
+                    msg = dict(message)
+                    if span_context:
+                        msg["span_context"] = span_context
+                    events.append(msg)
             displayed_message_count = max(displayed_message_count, len(messages))
 
         response = attributes.get("response")
         response_message = _response_to_message(response)
         if response_message is not None:
+            if span_context:
+                response_message["span_context"] = span_context
             events.append(response_message)
             displayed_message_count += 1
 
@@ -523,10 +558,17 @@ def _render_conversation_event(event: Mapping[str, Any]) -> str:
             f"<pre>{escape(reasoning)}</pre></details>"
         )
 
+    context = event.get("span_context", "")
+    context_html = ""
+    if context:
+        context_html = (
+            f'<span class="context-badge {escape(context)}">{escape(context)}</span>'
+        )
+
     content_html = f"<pre>{escape(content_text)}</pre>" if content_text else ""
     return (
         f'<article class="message {escape(role_class)}">'
-        f'<div class="role"><span>{escape(role)}</span>'
+        f'<div class="role"><span>{escape(role)}{context_html}</span>'
         f"<span>{escape(meta)}</span></div>"
         f"{reasoning_html}{content_html}{tool_calls_html}</article>"
     )
@@ -551,8 +593,16 @@ def _render_span_summary(
             f"<details><summary>Attributes</summary>{_json_pre(attributes)}</details>"
         )
 
+    span_context = ""
+    if isinstance(attributes, Mapping):
+        span_context = attributes.get("span_context", "")
+
+    context_class = ""
+    if span_context:
+        context_class = f" context-{escape(span_context)}"
+
     return (
-        f'<div class="span{status_class}">'
+        f'<div class="span{status_class}{context_class}">'
         f'<div class="span-title"><span>{escape(name)}</span>'
         f"<small>{escape(status)} {escape(duration_text)}</small></div>"
         f"<small>{escape(summary)}</small>{error_html}{details_html}</div>"
@@ -581,6 +631,9 @@ def _span_attribute_summary(attributes: Any) -> str:
     message_count = attributes.get("message_count")
     if message_count:
         parts.append(f"messages={message_count}")
+    span_context = attributes.get("span_context")
+    if span_context:
+        parts.append(f"context={span_context}")
     response_content = attributes.get("response_content")
     if isinstance(response_content, str) and response_content:
         parts.append(response_content[:80])
