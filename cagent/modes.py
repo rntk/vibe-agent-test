@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from datetime import UTC, datetime
+from importlib.resources import files
 from pathlib import Path
 from collections.abc import Sequence
 
@@ -51,7 +52,9 @@ def run_plan_mode(file_path: str, bash_advisor: str = "off") -> None:
         bash_client = smart_client
 
     task_content = Path(file_path).read_text(encoding="utf-8")
-    plan_template = Path("prompts/plan.md").read_text(encoding="utf-8")
+    plan_template = files("cagent").joinpath("prompts/plan.md").read_text(
+        encoding="utf-8"
+    )
     prompt = plan_template.replace("{task}", task_content)
 
     messages: list[LLMMessage] = []
@@ -161,7 +164,7 @@ def run_implementation_mode(file_path: str, bash_advisor: str = "off") -> None:
         "relevant code, explain it to the user and finish. "
         "Otherwise, research how to implement the users request using the "
         "available tools and information in the codebase. "
-        "Current directory: /app"
+        f"Current directory: {Path.cwd()}"
     )
 
     messages: list[LLMMessage] = []

@@ -272,10 +272,6 @@ def test_run_plan_mode_saves_plan(
     task_file = tmp_path / "task.txt"
     task_file.write_text("test task", encoding="utf-8")
 
-    prompts_dir = tmp_path / "prompts"
-    prompts_dir.mkdir()
-    (prompts_dir / "plan.md").write_text("Task: {task}", encoding="utf-8")
-
     client = FakeLLMClient([LLMResponse(content="# Plan\n1. Step one.")])
 
     original_cwd = os.getcwd()
@@ -302,10 +298,6 @@ def test_run_plan_mode_calls_tools_and_loops(
 
     task_file = tmp_path / "task.txt"
     task_file.write_text("read and plan", encoding="utf-8")
-
-    prompts_dir = tmp_path / "prompts"
-    prompts_dir.mkdir()
-    (prompts_dir / "plan.md").write_text("Task: {task}", encoding="utf-8")
 
     responses = [
         LLMResponse(
@@ -353,10 +345,6 @@ def test_run_plan_mode_exits_on_max_iterations(
 
     task_file = tmp_path / "task.txt"
     task_file.write_text("loop forever", encoding="utf-8")
-
-    prompts_dir = tmp_path / "prompts"
-    prompts_dir.mkdir()
-    (prompts_dir / "plan.md").write_text("Task: {task}", encoding="utf-8")
 
     # Always return a tool call so it never finishes
     responses = [

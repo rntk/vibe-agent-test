@@ -14,13 +14,15 @@ RUN groupadd -r appuser -g 1000 && \
 
 WORKDIR /app
 
+# Install dependencies first for better layer caching
 COPY --chown=appuser:appuser pyproject.toml poetry.lock ./
-
 RUN poetry config virtualenvs.create false && \
     poetry install --no-root
 
+# Copy source and install the package itself (registers the `cagent` console script)
 COPY --chown=appuser:appuser . .
+RUN poetry install
 
 USER appuser
 
-ENTRYPOINT [ "python" ]
+ENTRYPOINT ["cagent"]

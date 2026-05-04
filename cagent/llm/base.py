@@ -5,6 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 from cagent.tracing import get_trace
@@ -223,7 +224,7 @@ class LLMClient(ABC):
                 "the relevant code, explain it to the user and finish. "
                 "Otherwise, research how to implement the users request using "
                 "the available tools and information in the codebase. "
-                "Current directory: /app"
+                f"Current directory: {Path.cwd()}"
             )
 
         request = LLMRequest(
