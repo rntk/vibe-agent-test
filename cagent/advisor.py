@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 import time
 from pathlib import Path
 
@@ -73,13 +75,17 @@ EDIT_PRECHECK_SYSTEM_PROMPT = (
     "inefficiencies, or anything you cannot back with evidence from files you "
     "actually read. Quick-and-dirty is acceptable when the task is a quick fix; "
     "bias strongly toward approving.\n\n"
-    "When you are done investigating (or have seen enough), reply with a final "
-    "message that contains NO tool calls:\n"
-    "- If the edit looks acceptable OR you are uncertain, reply with exactly "
-    "the single word: None\n"
-    "- Otherwise reply with ONE short sentence naming the concrete problem and "
-    "the evidence. Do NOT rewrite the code, do NOT produce replacement code, "
-    "do NOT list steps. The fast agent will decide the exact fix itself."
+    "When you are done investigating, reply with a final message that contains "
+    "NO tool calls and a single JSON object with this exact shape:\n"
+    '  {"block": false}                                       — to let the edit proceed\n'
+    '  {"block": true, "comment": "<one short sentence>"}     — to block it\n\n'
+    "Rules for the JSON reply:\n"
+    "- Output ONLY the JSON object (no prose, no markdown fences, no extra keys).\n"
+    "- `block` MUST be a boolean. Default to false whenever you are uncertain.\n"
+    "- When `block` is true, `comment` MUST be one short sentence naming the "
+    "concrete problem and the evidence. Do NOT rewrite the code, do NOT "
+    "produce replacement code, do NOT list steps.\n"
+    "- When `block` is false, omit `comment` entirely — do not waste tokens on it."
 )
 
 _NONE_MARKERS = {"none", "none.", "n/a", "n/a."}
@@ -286,8 +292,11 @@ def request_edit_precheck(
             )
 
             if not response.tool_calls:
-                advice = _parse_advice((response.content or "").strip())
+                content = (response.content or "").strip()
+                advice, parse_status = _parse_block_decision(content)
                 span.set_attribute("advice", advice)
+                span.set_attribute("decision_parse_status", parse_status)
+                span.set_attribute("raw_response", content)
                 span.set_attribute("iterations_used", iteration + 1)
                 return advice
 
@@ -435,3 +444,63 @@ def _parse_advice(content: str) -> str | None:
     if normalized in _NONE_MARKERS:
         return None
     return content
+
+
+def _parse_block_decision(content: str) -> tuple[str | None, str]:
+    """Parse a JSON {"block": bool, "comment": str} reply from the edit precheck.
+
+    Returns (advice, parse_status). `advice` is the comment string when the
+    model explicitly asks to block, otherwise None. The parser is intentionally
+    lenient and biased toward NOT blocking: any malformed, missing, or
+    ambiguous reply returns (None, <status>) so the edit proceeds.
+    """
+
+    if not content:
+        return None, "empty"
+
+    payload = _extract_json_object(content)
+    if payload is None:
+        return None, "no_json_found"
+
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        return None, "json_decode_error"
+
+    if not isinstance(data, dict):
+        return None, "not_an_object"
+
+    block = data.get("block")
+    if isinstance(block, str):
+        block = block.strip().lower() in {"true", "yes", "1"}
+    if not isinstance(block, bool):
+        return None, "missing_block_flag"
+
+    if not block:
+        return None, "ok_no_block"
+
+    comment_raw = data.get("comment")
+    comment = comment_raw.strip() if isinstance(comment_raw, str) else ""
+    if not comment:
+        return None, "block_without_comment"
+
+    return comment, "ok_block"
+
+
+_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+def _extract_json_object(content: str) -> str | None:
+    """Return the first balanced JSON object substring, stripping code fences."""
+
+    text = content.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+        text = text.strip()
+
+    if text.startswith("{") and text.endswith("}"):
+        return text
+
+    match = _JSON_OBJECT_RE.search(text)
+    return match.group(0) if match else None
