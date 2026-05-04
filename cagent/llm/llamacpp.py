@@ -134,6 +134,8 @@ class LLamaCPP(LLMClient):
     def to_provider_message(message: LLMMessage) -> dict[str, Any]:
         """Convert one provider-neutral message to a llama.cpp chat message."""
         output: dict[str, Any] = {"role": message.role, "content": message.content}
+        if message.role == "assistant" and message.reasoning:
+            output["reasoning_content"] = message.reasoning
         if message.role == "tool":
             output["tool_call_id"] = message.tool_call_id
         if message.tool_calls:

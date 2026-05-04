@@ -174,7 +174,7 @@ class LLMRequest:
         messages: list[LLMMessage] = []
         if self.system_prompt:
             messages.append(LLMMessage(role="system", content=self.system_prompt))
-        messages.extend(self.messages)
+        messages.extend(_reasoning_before_tool_call_messages(self.messages))
         if self.user_prompt:
             messages.append(LLMMessage(role="user", content=self.user_prompt))
         return tuple(messages)
@@ -189,6 +189,42 @@ class LLMResponse:
     thought_signature: str | None = None
     tool_calls: Sequence[ToolCall] = field(default_factory=tuple)
     raw: Any | None = None
+
+
+def _reasoning_before_tool_call_messages(
+    messages: Sequence[LLMMessage],
+) -> tuple[LLMMessage, ...]:
+    """Split assistant reasoning into a message before its tool calls."""
+
+    normalized: list[LLMMessage] = []
+    for message in messages:
+        if (
+            message.role != "assistant"
+            or message.content is not None
+            or not message.reasoning
+            or not message.tool_calls
+        ):
+            normalized.append(message)
+            continue
+
+        normalized.append(
+            LLMMessage(
+                role="assistant",
+                content=message.reasoning,
+                reasoning=message.reasoning,
+                thought_signature=message.thought_signature,
+            )
+        )
+        normalized.append(
+            LLMMessage(
+                role="assistant",
+                content=None,
+                reasoning=message.reasoning,
+                tool_calls=tuple(message.tool_calls),
+            )
+        )
+
+    return tuple(normalized)
 
 
 class LLMClient(ABC):

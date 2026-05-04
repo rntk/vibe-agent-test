@@ -141,6 +141,44 @@ def test_request_all_messages_includes_system_and_user_prompt() -> None:
     ]
 
 
+def test_request_all_messages_splits_reasoning_before_tool_calls() -> None:
+    tool_call = ToolCall(
+        id="call_1",
+        name="search_docs",
+        arguments={"query": "llm adapters"},
+    )
+    request = LLMRequest(
+        user_prompt="continue",
+        messages=[
+            LLMMessage(
+                role="assistant",
+                content=None,
+                reasoning="I need to inspect the docs.",
+                tool_calls=[tool_call],
+            ),
+            LLMMessage(
+                role="tool",
+                content="Adapter docs result",
+                tool_call_id="call_1",
+            ),
+        ],
+    )
+
+    messages = request.all_messages()
+
+    assert [message.role for message in messages] == [
+        "assistant",
+        "assistant",
+        "tool",
+        "user",
+    ]
+    assert messages[0].content == "I need to inspect the docs."
+    assert messages[0].reasoning == "I need to inspect the docs."
+    assert messages[0].tool_calls == ()
+    assert messages[1].reasoning == "I need to inspect the docs."
+    assert messages[1].tool_calls == (tool_call,)
+
+
 def test_openai_adapter_transforms_text_response() -> None:
     sdk_client = FakeOpenAIClient(
         completion=_make_chat_completion(content="plain answer"),
@@ -278,6 +316,62 @@ def test_llamacpp_adapter_serializes_tool_calls_and_results() -> None:
             "role": "tool",
             "content": "Adapter docs result",
             "tool_call_id": "call_1",
+        },
+    ]
+
+
+def test_llamacpp_adapter_serializes_assistant_reasoning_content() -> None:
+    messages = [
+        LLMMessage(
+            role="assistant",
+            content="I need to inspect the docs.",
+            reasoning="I need to inspect the docs.",
+        ),
+    ]
+
+    provider_messages = LLamaCPP.to_provider_messages(messages)
+
+    assert provider_messages == [
+        {
+            "role": "assistant",
+            "content": "I need to inspect the docs.",
+            "reasoning_content": "I need to inspect the docs.",
+        },
+    ]
+
+
+def test_llamacpp_adapter_serializes_reasoning_content_with_tool_calls() -> None:
+    tool_call = ToolCall(
+        id="call_1",
+        name="search_docs",
+        arguments={"query": "llm adapters"},
+    )
+    messages = [
+        LLMMessage(
+            role="assistant",
+            content=None,
+            reasoning="I need to inspect the docs.",
+            tool_calls=[tool_call],
+        ),
+    ]
+
+    provider_messages = LLamaCPP.to_provider_messages(messages)
+
+    assert provider_messages == [
+        {
+            "role": "assistant",
+            "content": None,
+            "reasoning_content": "I need to inspect the docs.",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "search_docs",
+                        "arguments": '{"query": "llm adapters"}',
+                    },
+                }
+            ],
         },
     ]
 
