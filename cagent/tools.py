@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -287,6 +288,7 @@ def bash(
         msg = f"Working directory not found: {cwd}"
         raise FileNotFoundError(msg)
 
+    logging.info("Running bash command: %s", command)
     try:
         result = subprocess.run(
             ["bash", "-lc", command],
