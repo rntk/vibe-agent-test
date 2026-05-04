@@ -5,7 +5,12 @@ import re
 import time
 import traceback
 from collections.abc import Mapping, Sequence
-from http.client import HTTPConnection, HTTPSConnection
+from http.client import (
+    HTTPConnection,
+    HTTPSConnection,
+    IncompleteRead,
+    RemoteDisconnected,
+)
 from typing import Any, cast
 from urllib.parse import urlparse
 
@@ -26,6 +31,10 @@ _THINK_TAG_RE = re.compile(
 
 class EmptyResponseError(RuntimeError):
     """Raised when the LLM returns an empty response."""
+
+
+class TransientLLMTransportError(RuntimeError):
+    """Raised when an LLM request fails due to a retryable transport error."""
 
 
 class LLamaCPP(LLMClient):
@@ -349,6 +358,22 @@ class LLamaCPP(LLMClient):
             )
         except RuntimeError:
             raise
+        except (
+            ConnectionError,
+            IncompleteRead,
+            RemoteDisconnected,
+            TimeoutError,
+        ) as e:
+            tb = traceback.format_exc()
+            err_msg = (
+                f"LLM call failed with transient transport exception: "
+                f"{type(e).__name__}: {e}\n"
+                f"  Host: {self.__host}\n"
+                f"  Model: {self.__model}\n"
+                f"  Traceback:\n{tb}"
+            )
+            logging.error(err_msg)
+            raise TransientLLMTransportError(err_msg) from e
         except Exception as e:
             tb = traceback.format_exc()
             err_msg = (
@@ -369,6 +394,7 @@ class LLamaCPP(LLMClient):
             else self.__temperature
         )
         last_error: EmptyResponseError | None = None
+        last_transport_error: TransientLLMTransportError | None = None
         for attempt in range(self.__max_retries + 1):
             try:
                 return self._call_single(
@@ -385,8 +411,19 @@ class LLamaCPP(LLMClient):
                         f"{self.__retry_delay}s..."
                     )
                     time.sleep(self.__retry_delay)
+            except TransientLLMTransportError as e:
+                last_transport_error = e
+                if attempt < self.__max_retries:
+                    logging.warning(
+                        f"LLM transport error on attempt {attempt + 1}/"
+                        f"{self.__max_retries + 1}, retrying in "
+                        f"{self.__retry_delay}s..."
+                    )
+                    time.sleep(self.__retry_delay)
         if last_error is not None:
             raise last_error
+        if last_transport_error is not None:
+            raise last_transport_error
         raise RuntimeError("LLM call failed after all retries")
 
     def get_connection(self) -> HTTPConnection | HTTPSConnection:

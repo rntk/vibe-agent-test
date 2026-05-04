@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from http.client import IncompleteRead
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
@@ -26,6 +27,59 @@ from cagent.llm.anthropic import AnthropicClient
 from cagent.llm.llamacpp import LLamaCPP
 from cagent.llm.openai import OpenAIChatCompletionsClient, OpenAIResponsesClient
 from cagent.tracing import Trace, reset_trace, set_trace
+
+
+class FakeHTTPResponse:
+    def __init__(
+        self,
+        body: bytes | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.status = 200
+        self.reason = "OK"
+        self._body = body
+        self._error = error
+
+    def read(self) -> bytes:
+        if self._error is not None:
+            raise self._error
+        return self._body or b""
+
+
+class FakeHTTPConnection:
+    def __init__(self, responses: list[FakeHTTPResponse]) -> None:
+        self.responses = responses
+        self.requests: list[tuple[str, str, str | bytes, dict[str, str]]] = []
+        self.close_count = 0
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        body: str | bytes,
+        headers: dict[str, str],
+    ) -> None:
+        self.requests.append((method, url, body, headers))
+
+    def getresponse(self) -> FakeHTTPResponse:
+        return self.responses.pop(0)
+
+    def close(self) -> None:
+        self.close_count += 1
+
+
+class FakeLlamaCPP(LLamaCPP):
+    def __init__(self, connections: list[FakeHTTPConnection]) -> None:
+        super().__init__(
+            host="https://api.deepseek.com",
+            model="deepseek-v4-flash",
+            max_retries=1,
+            retry_delay=0,
+        )
+        self.connections = connections
+
+    def get_connection(self) -> FakeHTTPConnection:
+        return self.connections.pop(0)
 
 
 class FakeClient(LLMClient):
@@ -446,6 +500,30 @@ def test_llamacpp_adapter_extracts_reasoning_from_think_tags() -> None:
 
     assert response.reasoning == "Check inputs first."
     assert response.content == "plain answer"
+
+
+def test_llamacpp_client_retries_incomplete_chunked_response() -> None:
+    failed_connection = FakeHTTPConnection(
+        [FakeHTTPResponse(error=IncompleteRead(b""))]
+    )
+    successful_connection = FakeHTTPConnection(
+        [
+            FakeHTTPResponse(
+                body=(
+                    b'{"choices": [{"message": {"content": "retry worked"}}]}'
+                )
+            )
+        ]
+    )
+    client = FakeLlamaCPP([failed_connection, successful_connection])
+
+    response = client.complete("hello")
+
+    assert response.content == "retry worked"
+    assert len(failed_connection.requests) == 1
+    assert len(successful_connection.requests) == 1
+    assert failed_connection.close_count == 1
+    assert successful_connection.close_count == 1
 
 
 def test_openai_adapter_transforms_request_and_tool_calls() -> None:
