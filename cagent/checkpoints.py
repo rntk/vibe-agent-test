@@ -21,7 +21,6 @@ _CHECKPOINT_SYSTEM_PROMPT = (
     "Output exactly three short lines, nothing else:\n"
     "intention: <one short sentence describing what the agent wanted>\n"
     "action: <very brief description of the action taken>\n"
-    "arguments>\n"
     "result: <very brief phrase: success/failure and at most one key fact>\n"
     "</output_format>\n"
     "<rules>\n"
