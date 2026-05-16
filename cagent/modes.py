@@ -15,6 +15,7 @@ from cagent.checkpoints import _format_checkpoint
 from cagent.clients import create_fast_api_client, create_smart_api_client
 from cagent.compaction import compact_history
 from cagent.llm import LLMClient, LLMMessage, ToolCall
+from cagent.system_prompts import PLAN_SYSTEM_PROMPT, implementation_system_prompt
 from cagent.tools import IMPLEMENTATION_TOOLS, PLAN_TOOLS, ToolDefinition, run_tool_call
 
 MAX_ITERATIONS = 20
@@ -220,8 +221,8 @@ def run_plan_mode(
     fast_client, smart_client, bash_client = _make_clients(bash_advisor)
 
     task_content = Path(file_path).read_text(encoding="utf-8")
-    plan_template = files("cagent").joinpath("prompts/plan.md").read_text(
-        encoding="utf-8"
+    plan_template = (
+        files("cagent").joinpath("prompts/plan.md").read_text(encoding="utf-8")
     )
     prompt = plan_template.replace("{task}", task_content)
 
@@ -237,6 +238,7 @@ def run_plan_mode(
             "history_kind": "plan_chat_history",
             "span_context": "agent",
         },
+        system_prompt=PLAN_SYSTEM_PROMPT,
     )
 
     _run_agent_loop(
@@ -259,16 +261,6 @@ def run_implementation_mode(
 
     task_content = Path(file_path).read_text(encoding="utf-8")
 
-    system_prompt = (
-        "You are a software engineering assistant. "
-        "Use the available tools to research the current project. "
-        "If the users task already implemented in the codebase, find the "
-        "relevant code, explain it to the user and finish. "
-        "Otherwise, research how to implement the users request using the "
-        "available tools and information in the codebase. "
-        f"Current directory: {Path.cwd()}"
-    )
-
     config = ModeConfig(
         tools=IMPLEMENTATION_TOOLS,
         initial_user_content=task_content,
@@ -281,7 +273,7 @@ def run_implementation_mode(
             "history_kind": "implementation_chat_history",
             "span_context": "agent",
         },
-        system_prompt=system_prompt,
+        system_prompt=implementation_system_prompt(),
     )
 
     _run_agent_loop(

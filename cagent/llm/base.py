@@ -5,9 +5,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Literal
 
+from cagent.system_prompts import implementation_system_prompt
 from cagent.tracing import get_trace
 
 MessageRole = Literal["system", "user", "assistant", "tool"]
@@ -253,15 +253,7 @@ class LLMClient(ABC):
         """Run one provider-neutral LLM turn."""
 
         if not messages and system_prompt is None:
-            system_prompt = (
-                "You are a software engineering assistant. "
-                "Use the available tools to research the current project. "
-                "If the users task already implemented in the codebase, find "
-                "the relevant code, explain it to the user and finish. "
-                "Otherwise, research how to implement the users request using "
-                "the available tools and information in the codebase. "
-                f"Current directory: {Path.cwd()}"
-            )
+            system_prompt = implementation_system_prompt()
 
         request = LLMRequest(
             user_prompt=user_prompt,

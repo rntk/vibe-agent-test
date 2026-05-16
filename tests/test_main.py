@@ -17,6 +17,7 @@ from cagent.main import (
     run_implementation_mode,
     run_plan_mode,
 )
+from cagent.system_prompts import OPERATING_CONTRACT
 
 
 class FakeLLMClient(LLMClient):
@@ -153,7 +154,10 @@ def test_run_implementation_mode_skips_summary_by_default(
                 ToolCall(
                     id="call_1",
                     name="write_file",
-                    arguments={"path": str(tmp_path / "output.txt"), "content": "hello"},
+                    arguments={
+                        "path": str(tmp_path / "output.txt"),
+                        "content": "hello",
+                    },
                 )
             ],
         ),
@@ -187,7 +191,10 @@ def test_run_implementation_mode_uses_summary_when_enabled(
                 ToolCall(
                     id="call_1",
                     name="write_file",
-                    arguments={"path": str(tmp_path / "output.txt"), "content": "hello"},
+                    arguments={
+                        "path": str(tmp_path / "output.txt"),
+                        "content": "hello",
+                    },
                 )
             ],
         ),
@@ -198,7 +205,10 @@ def test_run_implementation_mode_uses_summary_when_enabled(
     with (
         patch("cagent.modes.create_fast_api_client", return_value=client),
         patch("cagent.modes.create_smart_api_client", return_value=None),
-        patch("cagent.modes._format_checkpoint", return_value="checkpoint") as mock_checkpoint,
+        patch(
+            "cagent.modes._format_checkpoint",
+            return_value="checkpoint",
+        ) as mock_checkpoint,
     ):
         run_implementation_mode(str(prompt_file), tool_summary=True)
 
@@ -356,6 +366,8 @@ def test_run_plan_mode_saves_plan(
     captured = capsys.readouterr()
     assert "Plan saved to" in captured.out
     assert (tmp_path / "plans").is_dir()
+    assert client.requests[0].system_prompt is not None
+    assert OPERATING_CONTRACT in client.requests[0].system_prompt
 
 
 def test_run_plan_mode_calls_tools_and_loops(
