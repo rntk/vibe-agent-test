@@ -7,6 +7,7 @@ import logging
 
 from cagent.clients import EchoLLMClient, create_fast_api_client, create_smart_api_client
 from cagent.modes import run_implementation_mode, run_plan_mode
+from cagent.web_mode import run_web_mode
 from cagent.tracing import Trace, reset_trace, set_trace, write_trace_html
 from pathlib import Path
 
@@ -24,6 +25,29 @@ def main() -> None:
         "--implementation",
         metavar="FILE",
         help="Path to a plan/prompt file for implementation mode with write tools",
+    )
+    parser.add_argument(
+        "-w",
+        "--web",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="FILE",
+        help=(
+            "Start interactive web mode. Optionally pass an initial task file "
+            "whose contents are seeded as the first user message."
+        ),
+    )
+    parser.add_argument(
+        "--web-host",
+        default="127.0.0.1",
+        help="Host to bind the web UI to (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--web-port",
+        type=int,
+        default=8765,
+        help="Port to bind the web UI to (default: 8765)",
     )
     parser.add_argument(
         "--trace",
@@ -109,6 +133,16 @@ def _run_args(args: argparse.Namespace) -> None:
             args.implementation,
             bash_advisor=args.bash_advisor,
             tool_summary=args.tool_summary,
+        )
+        return
+
+    if args.web is not None:
+        file_path = args.web if args.web else None
+        run_web_mode(
+            file_path,
+            bash_advisor=args.bash_advisor,
+            host=args.web_host,
+            port=args.web_port,
         )
         return
 

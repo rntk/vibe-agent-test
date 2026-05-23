@@ -18,6 +18,7 @@ from cagent.modes import (
     run_implementation_mode,
     run_plan_mode,
 )
+from cagent.web_mode import run_web_mode
 
 __all__ = [
     "EchoLLMClient",
@@ -26,6 +27,7 @@ __all__ = [
     "main",
     "run_implementation_mode",
     "run_plan_mode",
+    "run_web_mode",
     "_run_args",
     "_trace_file_from_arg",
     "_trace_html_file_from_trace_file",
