@@ -6,12 +6,13 @@ import json
 import logging
 import threading
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from cagent.llm import LLMMessage
+from cagent.llm import LLMMessage, ToolDefinition
 from cagent.modes import (
     BashAdvisor,
     _dispatch_tool_call,
@@ -20,6 +21,26 @@ from cagent.modes import (
 )
 from cagent.system_prompts import implementation_system_prompt
 from cagent.tools import IMPLEMENTATION_TOOLS
+
+_UNSET = object()
+
+LoopStatus = Literal[
+    "idle",
+    "paused",
+    "waiting_for_user",
+    "done_waiting_for_user",
+    "waiting_for_lm",
+    "running_tool",
+    "stopping",
+]
+
+
+@dataclass(frozen=True)
+class ContextSize:
+    """Estimated context size for the next LLM request."""
+
+    characters: int
+    estimated_tokens: int
 
 
 @dataclass
@@ -36,8 +57,8 @@ class WebSession:
 
     messages: list[StoredMessage] = field(default_factory=list)
     paused: bool = False
-    waiting_for_user: bool = False
-    busy: bool = False
+    status: LoopStatus = "idle"
+    active_detail: str | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
     cond: threading.Condition = field(init=False)
 
@@ -66,7 +87,46 @@ class WebSession:
     def set_paused(self, paused: bool) -> None:
         with self.cond:
             self.paused = paused
+            if paused and not self.busy:
+                self.set_status_locked("paused", detail="Paused by user")
+            elif self.is_waiting_for_user:
+                self.set_status_locked(
+                    self._waiting_status_locked(),
+                    detail=self._waiting_detail_locked(),
+                )
+            elif not self.busy:
+                self.set_status_locked("idle", detail=None)
             self.cond.notify_all()
+
+    def set_status(
+        self,
+        status: LoopStatus,
+        *,
+        detail: str | None | object = _UNSET,
+    ) -> None:
+        with self.cond:
+            self.set_status_locked(status, detail=detail)
+            self.cond.notify_all()
+
+    def set_status_locked(
+        self,
+        status: LoopStatus,
+        *,
+        detail: str | None | object = _UNSET,
+    ) -> None:
+        """Update status while the caller already holds ``self.cond``."""
+
+        self.status = status
+        if detail is not _UNSET:
+            self.active_detail = detail
+
+    @property
+    def busy(self) -> bool:
+        return self.status in ("waiting_for_lm", "running_tool")
+
+    @property
+    def is_waiting_for_user(self) -> bool:
+        return self.status in ("waiting_for_user", "done_waiting_for_user")
 
     def snapshot_messages(self) -> list[LLMMessage]:
         with self.cond:
@@ -76,12 +136,27 @@ class WebSession:
         """Block while paused, or while there is no work for the LLM."""
 
         with self.cond:
-            self.waiting_for_user = True
+            if self.paused:
+                self.set_status_locked("paused", detail="Paused by user")
+            else:
+                self.set_status_locked(
+                    self._waiting_status_locked(),
+                    detail=self._waiting_detail_locked(),
+                )
+            self.cond.notify_all()
             try:
                 while self.paused or not self._has_pending_work_locked():
                     self.cond.wait()
+                    if self.paused:
+                        self.set_status_locked("paused", detail="Paused by user")
+                    else:
+                        self.set_status_locked(
+                            self._waiting_status_locked(),
+                            detail=self._waiting_detail_locked(),
+                        )
             finally:
-                self.waiting_for_user = False
+                self.set_status_locked("idle", detail=None)
+                self.cond.notify_all()
 
     def _has_pending_work_locked(self) -> bool:
         """Work exists when the latest message is a user input or tool result.
@@ -94,6 +169,24 @@ class WebSession:
             return False
         last = self.messages[-1].message
         return last.role in ("user", "tool")
+
+    def _is_done_locked(self) -> bool:
+        if not self.messages:
+            return False
+        last = self.messages[-1].message
+        return last.role == "assistant" and not last.tool_calls
+
+    def _waiting_status_locked(self) -> LoopStatus:
+        if self._is_done_locked():
+            return "done_waiting_for_user"
+        return "waiting_for_user"
+
+    def _waiting_detail_locked(self) -> str:
+        if self._is_done_locked():
+            return "Task done; waiting for user input"
+        if not self.messages:
+            return "Waiting for initial user input"
+        return "Waiting for user input"
 
 
 def _message_to_dict(stored: StoredMessage) -> dict[str, Any]:
@@ -116,37 +209,145 @@ def _message_to_dict(stored: StoredMessage) -> dict[str, Any]:
     }
 
 
+def _value_size(value: Any) -> int:
+    """Estimate serialized size without allocating one large request string."""
+
+    if value is None:
+        return 0
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, bool):
+        return 4 if value else 5
+    if isinstance(value, int | float):
+        return len(str(value))
+    if isinstance(value, dict):
+        return sum(len(str(key)) + _value_size(item) for key, item in value.items())
+    if isinstance(value, Sequence) and not isinstance(value, bytes | bytearray):
+        return sum(_value_size(item) for item in value)
+    return len(str(value))
+
+
+def _context_size(
+    messages: Sequence[LLMMessage],
+    *,
+    system_prompt: str,
+    tools: Sequence[ToolDefinition],
+) -> ContextSize:
+    """Estimate the full request context web mode will send to the LLM."""
+
+    characters = len(system_prompt)
+    for tool in tools:
+        characters += len(tool.name)
+        characters += len(tool.description)
+        characters += _value_size(tool.parameters)
+        characters += _value_size(tool.strict)
+
+    for message in messages:
+        characters += len(message.role)
+        characters += _value_size(message.content)
+        characters += _value_size(message.reasoning)
+        characters += _value_size(message.tool_call_id)
+        for tool_call in message.tool_calls:
+            characters += _value_size(tool_call.id)
+            characters += len(tool_call.name)
+            characters += _value_size(tool_call.arguments)
+
+    return ContextSize(
+        characters=characters,
+        estimated_tokens=(characters + 3) // 4 if characters else 0,
+    )
+
+
 INDEX_HTML = """<!doctype html>
 <html>
 <head>
 <meta charset="utf-8"/>
 <title>cagent web</title>
 <style>
-body { font-family: -apple-system, sans-serif; max-width: 900px; margin: 1em auto; padding: 0 1em; }
+body {
+  font-family: -apple-system, sans-serif;
+  max-width: 900px;
+  margin: 1em auto;
+  padding: 0 1em;
+}
 .msg { border: 1px solid #ccc; border-radius: 6px; padding: 8px 12px; margin: 8px 0; }
 .user { background: #eef6ff; }
 .assistant { background: #f6f6f6; }
 .tool { background: #f0fff0; font-family: monospace; font-size: 0.9em; }
 .system { background: #fff8e0; }
 .role { font-weight: bold; font-size: 0.85em; color: #555; margin-bottom: 4px; }
-.reasoning { font-style: italic; color: #666; white-space: pre-wrap; border-left: 3px solid #ccc; padding-left: 8px; margin-bottom: 4px; }
+.reasoning {
+  font-style: italic;
+  color: #666;
+  white-space: pre-wrap;
+  border-left: 3px solid #ccc;
+  padding-left: 8px;
+  margin-bottom: 4px;
+}
 .content { white-space: pre-wrap; }
-.tc { background: #fffde0; padding: 4px 8px; margin: 4px 0; border-radius: 4px; font-family: monospace; font-size: 0.85em; white-space: pre-wrap; }
-.del { float: right; color: #c00; background: none; border: none; cursor: pointer; font-size: 1em; }
-.status { padding: 8px; background: #fafafa; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 1em; position: sticky; top: 0; }
+.tc {
+  background: #fffde0;
+  padding: 4px 8px;
+  margin: 4px 0;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 0.85em;
+  white-space: pre-wrap;
+}
+.del {
+  float: right;
+  color: #c00;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1em;
+}
+.status {
+  padding: 8px;
+  background: #fafafa;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  margin-bottom: 1em;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.status-line {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.metric { color: #555; font-size: 0.9em; }
 button { padding: 6px 12px; margin-right: 6px; cursor: pointer; }
-textarea { width: 100%; min-height: 60px; font-family: inherit; padding: 6px; box-sizing: border-box; }
+textarea {
+  width: 100%;
+  min-height: 60px;
+  font-family: inherit;
+  padding: 6px;
+  box-sizing: border-box;
+}
 </style>
 </head>
 <body>
 <div class="status">
-  <span id="state">loading…</span>
-  <button id="pauseBtn" onclick="togglePause()">Pause</button>
-  <button onclick="refresh()">Refresh</button>
+  <div class="status-line">
+    <span id="state">loading…</span>
+    <span id="context" class="metric"></span>
+    <span id="messagesMetric" class="metric"></span>
+  </div>
+  <div>
+    <button id="pauseBtn" onclick="togglePause()">Pause</button>
+    <button onclick="refresh()">Refresh</button>
+  </div>
 </div>
 <div id="messages"></div>
 <h3>Send message</h3>
-<textarea id="input" placeholder="Type a message to add to the conversation..."></textarea>
+<textarea
+  id="input"
+  placeholder="Type a message to add to the conversation..."
+></textarea>
 <div style="margin-top:6px"><button onclick="sendMessage()">Send</button></div>
 <script>
 let paused = false;
@@ -154,24 +355,47 @@ async function refresh() {
   const r = await fetch('/api/state');
   const s = await r.json();
   paused = s.paused;
-  document.getElementById('pauseBtn').textContent = paused ? 'Resume' : 'Pause';
-  let label;
-  if (s.busy) label = 'running';
-  else if (s.paused) label = 'paused';
-  else if (s.waiting_for_user) label = 'waiting for input';
-  else label = 'idle';
-  document.getElementById('state').textContent = 'status: ' + label + ' | messages: ' + s.messages.length;
+  document.getElementById('pauseBtn').textContent =
+    paused ? 'Resume' : 'Pause';
+  const labels = {
+    idle: 'idle',
+    paused: 'paused',
+    waiting_for_user: 'waiting for user input',
+    done_waiting_for_user: 'done, waiting for user input',
+    waiting_for_lm: 'waiting for LM response',
+    running_tool: 'running tool',
+    stopping: 'stopping'
+  };
+  const label = labels[s.status] || s.status || 'idle';
+  const contextSize = s.context_size || {};
+  const estimatedTokens = contextSize.estimated_tokens || 0;
+  const characters = contextSize.characters || 0;
+  document.getElementById('state').textContent =
+    'status: ' + label + (s.active_detail ? ' - ' + s.active_detail : '');
+  document.getElementById('context').textContent =
+    'context: ~' + estimatedTokens.toLocaleString() +
+    ' tokens / ' + characters.toLocaleString() + ' chars';
+  document.getElementById('messagesMetric').textContent =
+    'messages: ' + s.messages.length;
   const c = document.getElementById('messages');
   c.innerHTML = '';
   for (const m of s.messages) {
     const d = document.createElement('div');
     d.className = 'msg ' + m.role;
-    let html = '<button class="del" onclick="removeMsg(\\''+m.id+'\\')">x</button>';
-    html += '<div class="role">'+m.role+(m.tool_call_id?(' [tool_call_id='+escapeHtml(m.tool_call_id)+']'):'')+'</div>';
-    if (m.reasoning) html += '<div class="reasoning">'+escapeHtml(m.reasoning)+'</div>';
-    if (m.content) html += '<div class="content">'+escapeHtml(m.content)+'</div>';
+    let html =
+      '<button class="del" onclick="removeMsg(\\''+m.id+'\\')">x</button>';
+    html += '<div class="role">' + m.role +
+      (m.tool_call_id ? (' [tool_call_id=' + escapeHtml(m.tool_call_id) + ']') : '') +
+      '</div>';
+    if (m.reasoning) {
+      html += '<div class="reasoning">' + escapeHtml(m.reasoning) + '</div>';
+    }
+    if (m.content) {
+      html += '<div class="content">' + escapeHtml(m.content) + '</div>';
+    }
     for (const tc of m.tool_calls) {
-      html += '<div class="tc">→ '+escapeHtml(tc.name)+'('+escapeHtml(JSON.stringify(tc.arguments))+')</div>';
+      html += '<div class="tc">-> ' + escapeHtml(tc.name) + '(' +
+        escapeHtml(JSON.stringify(tc.arguments)) + ')</div>';
     }
     d.innerHTML = html;
     c.appendChild(d);
@@ -179,7 +403,13 @@ async function refresh() {
 }
 function escapeHtml(s) {
   if (s === null || s === undefined) return '';
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[c]));
 }
 async function togglePause() {
   await fetch(paused ? '/api/resume' : '/api/pause', {method: 'POST'});
@@ -189,12 +419,20 @@ async function sendMessage() {
   const t = document.getElementById('input');
   const v = t.value;
   if (!v.trim()) return;
-  await fetch('/api/message', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content: v})});
+  await fetch('/api/message', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({content: v})
+  });
   t.value = '';
   refresh();
 }
 async function removeMsg(id) {
-  await fetch('/api/remove', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id: id})});
+  await fetch('/api/remove', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({id: id})
+  });
   refresh();
 }
 refresh();
@@ -205,7 +443,12 @@ setInterval(refresh, 1500);
 """
 
 
-def _make_handler(session: WebSession) -> type[BaseHTTPRequestHandler]:
+def _make_handler(
+    session: WebSession,
+    *,
+    system_prompt: str,
+    tools: Sequence[ToolDefinition],
+) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
             return
@@ -239,14 +482,30 @@ def _make_handler(session: WebSession) -> type[BaseHTTPRequestHandler]:
                 return
             if self.path == "/api/state":
                 with session.cond:
-                    payload = {
-                        "paused": session.paused,
-                        "busy": session.busy,
-                        "waiting_for_user": session.waiting_for_user,
-                        "messages": [
-                            _message_to_dict(s) for s in session.messages
-                        ],
-                    }
+                    stored_messages = list(session.messages)
+                    paused = session.paused
+                    busy = session.busy
+                    waiting_for_user = session.is_waiting_for_user
+                    status = session.status
+                    active_detail = session.active_detail
+                messages = _normalize_for_llm([s.message for s in stored_messages])
+                context_size = _context_size(
+                    messages,
+                    system_prompt=system_prompt,
+                    tools=tools,
+                )
+                payload = {
+                    "paused": paused,
+                    "busy": busy,
+                    "waiting_for_user": waiting_for_user,
+                    "status": status,
+                    "active_detail": active_detail,
+                    "context_size": {
+                        "characters": context_size.characters,
+                        "estimated_tokens": context_size.estimated_tokens,
+                    },
+                    "messages": [_message_to_dict(s) for s in stored_messages],
+                }
                 self._json(200, payload)
                 return
             self.send_response(404)
@@ -307,6 +566,7 @@ def _run_web_loop(
     smart_client: Any,
     bash_client: Any,
     system_prompt: str,
+    tools: Sequence[ToolDefinition],
     task_summary: str,
 ) -> None:
     iteration = 0
@@ -321,15 +581,20 @@ def _run_web_loop(
             if last_user and (last_user.message.content or "").strip() == "/exit":
                 logging.info("Received /exit — stopping web loop")
                 print("Received /exit — stopping web loop")
+                session.set_status_locked("stopping", detail="Received /exit")
+                session.cond.notify_all()
                 return
-            session.busy = True
         try:
             messages = _normalize_for_llm(session.snapshot_messages())
             try:
+                session.set_status(
+                    "waiting_for_lm",
+                    detail=f"Agent turn {iteration + 1}",
+                )
                 response = fast_client.complete(
                     "",
                     system_prompt=system_prompt,
-                    tools=IMPLEMENTATION_TOOLS,
+                    tools=tools,
                     messages=messages,
                     trace_name="llm.complete.web.agent_turn",
                     trace_attributes={
@@ -365,7 +630,16 @@ def _run_web_loop(
                 # Check pause between tool calls so the user can intervene.
                 with session.cond:
                     while session.paused:
+                        session.set_status_locked(
+                            "paused",
+                            detail="Paused between tool calls",
+                        )
+                        session.cond.notify_all()
                         session.cond.wait()
+                session.set_status(
+                    "running_tool",
+                    detail=tool_call.name,
+                )
                 content = _dispatch_tool_call(
                     tool_call,
                     bash_client=bash_client,
@@ -382,7 +656,8 @@ def _run_web_loop(
                 )
         finally:
             with session.cond:
-                session.busy = False
+                if session.status in ("waiting_for_lm", "running_tool"):
+                    session.set_status_locked("idle", detail=None)
                 session.cond.notify_all()
 
 
@@ -405,7 +680,12 @@ def run_web_mode(
     else:
         task_summary = ""
 
-    handler_cls = _make_handler(session)
+    system_prompt = implementation_system_prompt()
+    handler_cls = _make_handler(
+        session,
+        system_prompt=system_prompt,
+        tools=IMPLEMENTATION_TOOLS,
+    )
     server = ThreadingHTTPServer((host, port), handler_cls)
     server_thread = threading.Thread(
         target=server.serve_forever, name="cagent-web", daemon=True
@@ -420,7 +700,8 @@ def run_web_mode(
             fast_client=fast_client,
             smart_client=smart_client,
             bash_client=bash_client,
-            system_prompt=implementation_system_prompt(),
+            system_prompt=system_prompt,
+            tools=IMPLEMENTATION_TOOLS,
             task_summary=task_summary,
         )
     except KeyboardInterrupt:
