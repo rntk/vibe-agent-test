@@ -319,12 +319,28 @@ def _is_tombstone(content: str | None) -> bool:
     return bool(content) and content.startswith(TOMBSTONE_PREFIX)  # type: ignore[union-attr]
 
 
-def _tombstone_text(call: ToolCall, superseded_by_index: int) -> str:
+def tombstone_text(tool_name: str, reason: str) -> str:
+    """Return a tombstone string suitable as tool-result content.
+
+    The format matches ``TOMBSTONE_PREFIX`` so that ``is_tombstone()``
+    recognises the result.
+    """
     return (
-        f"{TOMBSTONE_PREFIX} tool={call.name} output hidden; "
-        f"superseded by a newer call with similar arguments later in this "
-        f"conversation (message #{superseded_by_index}).]"
+        f"{TOMBSTONE_PREFIX} tool={tool_name} output hidden; {reason}.]"
     )
+
+
+def _tombstone_text(call: ToolCall, superseded_by_index: int) -> str:
+    return tombstone_text(
+        call.name,
+        f"superseded by a newer call with similar arguments later in this "
+        f"conversation (message #{superseded_by_index})",
+    )
+
+
+def is_tombstone(content: str | None) -> bool:
+    """Return True when *content* starts with the ``TOMBSTONE_PREFIX``."""
+    return _is_tombstone(content)
 
 
 def _tombstone_size(call: ToolCall) -> int:
@@ -398,4 +414,6 @@ __all__ = [
     "DEFAULT_SIMILARITY_THRESHOLD",
     "TOMBSTONE_PREFIX",
     "compact_history",
+    "is_tombstone",
+    "tombstone_text",
 ]

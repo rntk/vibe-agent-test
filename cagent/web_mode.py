@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Literal
 
+from cagent.compaction import is_tombstone, tombstone_text
 from cagent.llm import LLMMessage, ToolDefinition
 from cagent.modes import (
     BashAdvisor,
@@ -79,10 +80,88 @@ class WebSession:
         with self.cond:
             for i, stored in enumerate(self.messages):
                 if stored.id == message_id:
-                    del self.messages[i]
+                    msg = stored.message
+                    if msg.role == "tool":
+                        # Tombstone tool results instead of deleting them so
+                        # the corresponding assistant tool_call still has a
+                        # matching tool message in the list.
+                        tool_name = self._lookup_tool_name(msg.tool_call_id)
+                        new_msg = LLMMessage(
+                            role="tool",
+                            content=tombstone_text(tool_name, "deleted by user"),
+                            tool_call_id=msg.tool_call_id,
+                        )
+                        self.messages[i] = StoredMessage(
+                            id=stored.id, message=new_msg
+                        )
+                        if msg.tool_call_id:
+                            self._strip_signature_if_any_tombstoned(
+                                msg.tool_call_id
+                            )
+                    else:
+                        # User and assistant messages are removed entirely.
+                        del self.messages[i]
                     self.cond.notify_all()
                     return True
             return False
+
+    def _lookup_tool_name(self, tool_call_id: str | None) -> str:
+        """Return the tool name for *tool_call_id*, or ``"unknown"``."""
+
+        if not tool_call_id:
+            return "unknown"
+        for stored in self.messages:
+            msg = stored.message
+            if msg.role == "assistant" and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    if tc.id == tool_call_id:
+                        return tc.name
+        return "unknown"
+
+    def _strip_signature_if_any_tombstoned(self, tool_call_id: str) -> None:
+        """Strip *thought_signature* from the assistant that issued
+        *tool_call_id* when any of its tool results are tombstoned.
+
+        The signature is cryptographically bound to the complete tool-call
+        chain; once any result is tombstoned the chain is broken and the
+        signature becomes stale.  This matches the compaction behaviour
+        (see compact_history in compaction.py).
+
+        *reasoning* is preserved because some providers (e.g. DeepSeek)
+        require it to be passed back in every subsequent turn.
+        """
+
+        # Find the assistant message that owns this tool_call_id.
+        assistant_idx = -1
+        for idx, stored in enumerate(self.messages):
+            msg = stored.message
+            if msg.role == "assistant" and msg.tool_calls:
+                ids = {tc.id for tc in msg.tool_calls if tc.id}
+                if tool_call_id in ids:
+                    assistant_idx = idx
+                    break
+
+        if assistant_idx < 0:
+            return
+
+        stored = self.messages[assistant_idx]
+        msg = stored.message
+
+        # Nothing to strip if there is no signature.
+        if msg.thought_signature is None:
+            return
+
+        self.messages[assistant_idx] = StoredMessage(
+            id=stored.id,
+            message=LLMMessage(
+                role=msg.role,
+                content=msg.content,
+                tool_calls=msg.tool_calls,
+                tool_call_id=msg.tool_call_id,
+                reasoning=msg.reasoning,
+                thought_signature=None,
+            ),
+        )
 
     def set_paused(self, paused: bool) -> None:
         with self.cond:
