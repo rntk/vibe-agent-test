@@ -124,7 +124,10 @@ def compact_history(
                 reasoning=old.reasoning,
             )
 
-        # Strip reasoning and the signature bound to it.
+        # Strip only the Anthropic thought_signature (which is cryptographically
+        # bound to the tool results and becomes invalid once any result is
+        # tombstoned). reasoning_content must be preserved for providers like
+        # DeepSeek that require it to be passed back in every subsequent turn.
         for idx in assistant_indices_to_strip_reasoning:
             old = folded_messages[idx]
             folded_messages[idx] = LLMMessage(
@@ -132,7 +135,7 @@ def compact_history(
                 content=old.content,
                 tool_calls=old.tool_calls,
                 tool_call_id=old.tool_call_id,
-                reasoning=None,
+                reasoning=old.reasoning,
                 thought_signature=None,
             )
 

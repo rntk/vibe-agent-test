@@ -69,9 +69,19 @@ class OpenAIChatCompletionsClient(LLMClient):
     def _complete(self, request: LLMRequest) -> LLMResponse:
         """Run one LLM turn through an OpenAI-compatible client."""
 
+        # Build messages without the Anthropic-specific reasoning split.
+        # For OpenAI/DeepSeek, reasoning_content belongs in the same message
+        # as tool_calls; splitting creates invalid consecutive assistant turns.
+        msgs: list[LLMMessage] = []
+        if request.system_prompt:
+            msgs.append(LLMMessage(role="system", content=request.system_prompt))
+        msgs.extend(request.messages)
+        if request.user_prompt:
+            msgs.append(LLMMessage(role="user", content=request.user_prompt))
+
         payload: dict[str, Any] = {
             "model": request.model or self.default_model,
-            "messages": self.to_provider_messages(request.all_messages()),
+            "messages": self.to_provider_messages(msgs),
         }
         if request.tools:
             payload["tools"] = self.to_provider_tools(request.tools)
