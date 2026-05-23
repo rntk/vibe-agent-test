@@ -10,7 +10,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from cagent.advisor import apply_advisor, precheck_tool_call
+from cagent.advisor import AdvisorObserver, apply_advisor, precheck_tool_call
 from cagent.checkpoints import _format_checkpoint
 from cagent.clients import create_fast_api_client, create_smart_api_client
 from cagent.compaction import compact_history
@@ -65,6 +65,7 @@ def _dispatch_tool_call(
     smart_client: LLMClient | None,
     fast_client: LLMClient,
     task_summary: str,
+    on_advisor: AdvisorObserver | None = None,
 ) -> str:
     """Run precheck + tool + advisor for one call. Returns the tool result content."""
 
@@ -74,6 +75,7 @@ def _dispatch_tool_call(
             bash_client,
             smart_client=smart_client,
             task_summary=task_summary,
+            on_advisor=on_advisor,
         )
     except Exception as exc:
         return f"Error: precheck failed: {exc}"
@@ -87,7 +89,7 @@ def _dispatch_tool_call(
         return f"Error: {exc}"
 
     try:
-        tool_result = apply_advisor(tool_result, fast_client)
+        tool_result = apply_advisor(tool_result, fast_client, on_advisor=on_advisor)
     except Exception as exc:
         # Advisor is non-essential: log to stderr, return raw tool output.
         print(f"Warning: advisor failed: {exc}", file=sys.stderr)

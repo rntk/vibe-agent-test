@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Literal
 
+from cagent.advisor import AdvisorObserver
 from cagent.compaction import is_tombstone, tombstone_text
 from cagent.llm import LLMMessage, ToolDefinition
 from cagent.modes import (
@@ -50,6 +51,8 @@ class StoredMessage:
 
     id: str
     message: LLMMessage
+    kind: str = "message"  # "message" | "advisor"
+    advisor_group: str | None = None  # e.g. "Edit precheck", "Bash precheck"
 
 
 @dataclass
@@ -76,10 +79,28 @@ class WebSession:
     def add_user_message(self, content: str) -> StoredMessage:
         return self.add_message(LLMMessage(role="user", content=content))
 
+    def add_advisor_message(
+        self, message: LLMMessage, *, group: str
+    ) -> StoredMessage:
+        with self.cond:
+            stored = StoredMessage(
+                id=uuid.uuid4().hex,
+                message=message,
+                kind="advisor",
+                advisor_group=group,
+            )
+            self.messages.append(stored)
+            self.cond.notify_all()
+            return stored
+
     def remove_message(self, message_id: str) -> bool:
         with self.cond:
             for i, stored in enumerate(self.messages):
                 if stored.id == message_id:
+                    if stored.kind == "advisor":
+                        del self.messages[i]
+                        self.cond.notify_all()
+                        return True
                     msg = stored.message
                     if msg.role == "tool":
                         # Tombstone tool results instead of deleting them so
@@ -285,6 +306,8 @@ def _message_to_dict(stored: StoredMessage) -> dict[str, Any]:
         "reasoning": msg.reasoning,
         "tool_calls": tool_calls,
         "tool_call_id": msg.tool_call_id,
+        "kind": stored.kind,
+        "advisor_group": stored.advisor_group,
     }
 
 
@@ -354,6 +377,23 @@ body {
 .assistant { background: #f6f6f6; }
 .tool { background: #f0fff0; font-family: monospace; font-size: 0.9em; }
 .system { background: #fff8e0; }
+.advisor-wrapper {
+  border-left: 3px solid #9b59b6;
+  margin: 4px 0 4px 16px;
+  padding-left: 8px;
+}
+.advisor-header {
+  font-size: 0.78em;
+  font-weight: bold;
+  color: #7d3c98;
+  margin-bottom: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.advisor-msg { border: 1px solid #d2b4de; border-radius: 4px; padding: 6px 10px; margin: 3px 0; }
+.advisor-user { background: #f5eef8; }
+.advisor-assistant { background: #f0e6f6; }
+.advisor-tool { background: #e8daef; font-family: monospace; font-size: 0.85em; }
 .role { font-weight: bold; font-size: 0.85em; color: #555; margin-bottom: 4px; }
 .reasoning {
   font-style: italic;
@@ -458,26 +498,62 @@ async function refresh() {
     'messages: ' + s.messages.length;
   const c = document.getElementById('messages');
   c.innerHTML = '';
+  // Group consecutive advisor messages under a shared wrapper.
+  let advisorWrapper = null;
+  let advisorGroup = null;
   for (const m of s.messages) {
-    const d = document.createElement('div');
-    d.className = 'msg ' + m.role;
-    let html =
-      '<button class="del" onclick="removeMsg(\\''+m.id+'\\')">x</button>';
-    html += '<div class="role">' + m.role +
-      (m.tool_call_id ? (' [tool_call_id=' + escapeHtml(m.tool_call_id) + ']') : '') +
-      '</div>';
-    if (m.reasoning) {
-      html += '<div class="reasoning">' + escapeHtml(m.reasoning) + '</div>';
+    if (m.kind === 'advisor') {
+      if (advisorWrapper === null || m.advisor_group !== advisorGroup) {
+        advisorWrapper = document.createElement('div');
+        advisorWrapper.className = 'advisor-wrapper';
+        const hdr = document.createElement('div');
+        hdr.className = 'advisor-header';
+        hdr.textContent = '🤖 ' + (m.advisor_group || 'Advisor');
+        advisorWrapper.appendChild(hdr);
+        c.appendChild(advisorWrapper);
+        advisorGroup = m.advisor_group;
+      }
+      const d = document.createElement('div');
+      d.className = 'advisor-msg advisor-' + m.role;
+      let html = '<button class="del" onclick="removeMsg(\\''+m.id+'\\')">x</button>';
+      html += '<div class="role">' + m.role +
+        (m.tool_call_id ? (' [' + escapeHtml(m.tool_call_id) + ']') : '') +
+        '</div>';
+      if (m.reasoning) {
+        html += '<div class="reasoning">' + escapeHtml(m.reasoning) + '</div>';
+      }
+      if (m.content) {
+        html += '<div class="content">' + escapeHtml(m.content) + '</div>';
+      }
+      for (const tc of m.tool_calls) {
+        html += '<div class="tc">-> ' + escapeHtml(tc.name) + '(' +
+          escapeHtml(JSON.stringify(tc.arguments)) + ')</div>';
+      }
+      d.innerHTML = html;
+      advisorWrapper.appendChild(d);
+    } else {
+      advisorWrapper = null;
+      advisorGroup = null;
+      const d = document.createElement('div');
+      d.className = 'msg ' + m.role;
+      let html =
+        '<button class="del" onclick="removeMsg(\\''+m.id+'\\')">x</button>';
+      html += '<div class="role">' + m.role +
+        (m.tool_call_id ? (' [tool_call_id=' + escapeHtml(m.tool_call_id) + ']') : '') +
+        '</div>';
+      if (m.reasoning) {
+        html += '<div class="reasoning">' + escapeHtml(m.reasoning) + '</div>';
+      }
+      if (m.content) {
+        html += '<div class="content">' + escapeHtml(m.content) + '</div>';
+      }
+      for (const tc of m.tool_calls) {
+        html += '<div class="tc">-> ' + escapeHtml(tc.name) + '(' +
+          escapeHtml(JSON.stringify(tc.arguments)) + ')</div>';
+      }
+      d.innerHTML = html;
+      c.appendChild(d);
     }
-    if (m.content) {
-      html += '<div class="content">' + escapeHtml(m.content) + '</div>';
-    }
-    for (const tc of m.tool_calls) {
-      html += '<div class="tc">-> ' + escapeHtml(tc.name) + '(' +
-        escapeHtml(JSON.stringify(tc.arguments)) + ')</div>';
-    }
-    d.innerHTML = html;
-    c.appendChild(d);
   }
 }
 function escapeHtml(s) {
@@ -567,7 +643,7 @@ def _make_handler(
                     waiting_for_user = session.is_waiting_for_user
                     status = session.status
                     active_detail = session.active_detail
-                messages = _normalize_for_llm([s.message for s in stored_messages])
+                messages = _normalize_stored_for_llm(stored_messages)
                 context_size = _context_size(
                     messages,
                     system_prompt=system_prompt,
@@ -621,7 +697,7 @@ def _make_handler(
 
 
 def _normalize_for_llm(messages: list[LLMMessage]) -> list[LLMMessage]:
-    """Drop orphan tool messages whose preceding assistant tool_call was removed."""
+    """Drop orphan tool messages and advisor-only messages."""
 
     valid_ids: set[str] = set()
     for msg in messages:
@@ -636,6 +712,13 @@ def _normalize_for_llm(messages: list[LLMMessage]) -> list[LLMMessage]:
             continue
         out.append(msg)
     return out
+
+
+def _normalize_stored_for_llm(stored_messages: list[StoredMessage]) -> list[LLMMessage]:
+    """Filter advisor messages, then apply LLM normalization."""
+
+    main_messages = [s.message for s in stored_messages if s.kind == "message"]
+    return _normalize_for_llm(main_messages)
 
 
 def _run_web_loop(
@@ -664,7 +747,9 @@ def _run_web_loop(
                 session.cond.notify_all()
                 return
         try:
-            messages = _normalize_for_llm(session.snapshot_messages())
+            with session.cond:
+                stored_snapshot = list(session.messages)
+            messages = _normalize_stored_for_llm(stored_snapshot)
             try:
                 session.set_status(
                     "waiting_for_lm",
@@ -719,12 +804,23 @@ def _run_web_loop(
                     "running_tool",
                     detail=tool_call.name,
                 )
+
+                def _on_advisor(message: LLMMessage, group: str) -> None:
+                    session.add_advisor_message(message, group=group)
+                    with session.cond:
+                        session.set_status_locked(
+                            "running_tool",
+                            detail=f"Advisor: {group}",
+                        )
+                        session.cond.notify_all()
+
                 content = _dispatch_tool_call(
                     tool_call,
                     bash_client=bash_client,
                     smart_client=smart_client,
                     fast_client=fast_client,
                     task_summary=task_summary,
+                    on_advisor=_on_advisor,
                 )
                 session.add_message(
                     LLMMessage(

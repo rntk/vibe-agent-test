@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from cagent.llm.base import (
@@ -18,8 +19,14 @@ from cagent.llm.base import (
 from cagent.tools import AdvisorInput, ToolResult
 from cagent.tracing import get_trace
 
+# Callback invoked for each message in an advisor sub-conversation.
+# Arguments: (message, group_label) where group_label is a short string
+# like "Edit precheck" or "Tool failure advisor".
+AdvisorObserver = Callable[[LLMMessage, str], None]
+
 __all__ = [
     "ADVISOR_SYSTEM_PROMPT",
+    "AdvisorObserver",
     "EDIT_PRECHECK_SYSTEM_PROMPT",
     "PRECHECK_SYSTEM_PROMPT",
     "apply_advisor",
@@ -83,10 +90,13 @@ _MAX_FILE_BYTES_FOR_PRECHECK = 50 * 1024
 def request_advice(
     advisor_input: AdvisorInput,
     client: LLMClient,
+    *,
+    on_advisor: AdvisorObserver | None = None,
 ) -> str | None:
     """Ask the LLM for a short diagnosis; return None if no useful advice."""
 
     prompt = _format_prompt(advisor_input)
+    _notify(on_advisor, LLMMessage(role="user", content=prompt), "Tool failure advisor")
     with get_trace().span(
         "advisor.request",
         {
@@ -110,28 +120,38 @@ def request_advice(
         content = (response.content or "").strip()
         advice = _parse_advice(content)
         span.set_attribute("advice", advice)
+        _notify(
+            on_advisor,
+            LLMMessage(role="assistant", content=response.content, reasoning=response.reasoning),
+            "Tool failure advisor",
+        )
         return advice
 
 
 def apply_advisor(
     result: ToolResult,
     client: LLMClient | None,
+    *,
+    on_advisor: AdvisorObserver | None = None,
 ) -> ToolResult:
     """Run the advisor on a tool result if needed and return the (possibly) annotated result."""
 
     if result.advisor_input is None or client is None:
         return ToolResult(output=result.output)
-    advice = request_advice(result.advisor_input, client)
+    advice = request_advice(result.advisor_input, client, on_advisor=on_advisor)
     return result.with_advice(advice)
 
 
 def request_precheck(
     command: str,
     client: LLMClient,
+    *,
+    on_advisor: AdvisorObserver | None = None,
 ) -> str | None:
     """Ask the LLM to review a bash command before it runs; return critical note or None."""
 
     prompt = f"Command:\n{command}\n"
+    _notify(on_advisor, LLMMessage(role="user", content=prompt), "Bash precheck")
     with get_trace().span(
         "advisor.precheck",
         {"tool_name": BASH_TOOL.name, "command": command, "span_context": "advisor"},
@@ -149,6 +169,11 @@ def request_precheck(
         content = (response.content or "").strip()
         advice = _parse_advice(content)
         span.set_attribute("advice", advice)
+        _notify(
+            on_advisor,
+            LLMMessage(role="assistant", content=response.content, reasoning=response.reasoning),
+            "Bash precheck",
+        )
         return advice
 
 
@@ -158,6 +183,7 @@ def precheck_tool_call(
     *,
     smart_client: LLMClient | None = None,
     task_summary: str | None = None,
+    on_advisor: AdvisorObserver | None = None,
 ) -> ToolResult | None:
     """Pre-execution advisor: block risky tool calls with a critical note, else return None."""
 
@@ -167,7 +193,7 @@ def precheck_tool_call(
         command = tool_call.arguments.get("command")
         if not isinstance(command, str) or not command.strip():
             return None
-        advice = request_precheck(command, client)
+        advice = request_precheck(command, client, on_advisor=on_advisor)
         if not advice:
             return None
         output = (
@@ -183,7 +209,9 @@ def precheck_tool_call(
     if tool_call.name in (WRITE_FILE_TOOL.name, SEARCH_AND_REPLACE_TOOL.name):
         if smart_client is None:
             return None
-        advice = request_edit_precheck(tool_call, task_summary, smart_client)
+        advice = request_edit_precheck(
+            tool_call, task_summary, smart_client, on_advisor=on_advisor
+        )
         if not advice:
             return None
         output = (
@@ -205,6 +233,7 @@ def request_edit_precheck(
     *,
     max_iterations: int = _EDIT_PRECHECK_MAX_ITERATIONS,
     time_budget_seconds: float = _EDIT_PRECHECK_TIME_BUDGET_SECONDS,
+    on_advisor: AdvisorObserver | None = None,
 ) -> str | None:
     """Run a tool-using advisor loop to review a pending edit; return critical note or None."""
 
@@ -259,7 +288,9 @@ def request_edit_precheck(
                 return None
 
             if iteration == 0:
-                messages.append(LLMMessage(role="user", content=user_prompt))
+                user_msg = LLMMessage(role="user", content=user_prompt)
+                messages.append(user_msg)
+                _notify(on_advisor, user_msg, "Edit precheck")
 
             response = client.complete(
                 "",
@@ -283,6 +314,15 @@ def request_edit_precheck(
                 span.set_attribute("decision_parse_status", parse_status)
                 span.set_attribute("raw_response", content)
                 span.set_attribute("iterations_used", iteration + 1)
+                _notify(
+                    on_advisor,
+                    LLMMessage(
+                        role="assistant",
+                        content=response.content,
+                        reasoning=response.reasoning,
+                    ),
+                    "Edit precheck",
+                )
                 return advice
 
             normalized: list[ToolCall] = []
@@ -297,28 +337,29 @@ def request_edit_precheck(
                             arguments=tc.arguments,
                         )
                     )
-            messages.append(
-                LLMMessage(
-                    role="assistant",
-                    content=response.content,
-                    tool_calls=tuple(normalized),
-                    reasoning=response.reasoning,
-                    thought_signature=response.thought_signature,
-                )
+            assistant_msg = LLMMessage(
+                role="assistant",
+                content=response.content,
+                tool_calls=tuple(normalized),
+                reasoning=response.reasoning,
+                thought_signature=response.thought_signature,
             )
+            messages.append(assistant_msg)
+            _notify(on_advisor, assistant_msg, "Edit precheck")
+
             for tc in normalized:
                 try:
                     result = run_tool(tc.name, tc.arguments)
                     output = result.output
                 except Exception as exc:  # noqa: BLE001
                     output = f"Error: {exc}"
-                messages.append(
-                    LLMMessage(
-                        role="tool",
-                        content=output,
-                        tool_call_id=tc.id or "",
-                    )
+                tool_msg = LLMMessage(
+                    role="tool",
+                    content=output,
+                    tool_call_id=tc.id or "",
                 )
+                messages.append(tool_msg)
+                _notify(on_advisor, tool_msg, "Edit precheck")
 
         span.set_attribute("iterations_exhausted", True)
         return None
@@ -489,3 +530,15 @@ def _extract_json_object(content: str) -> str | None:
 
     match = _JSON_OBJECT_RE.search(text)
     return match.group(0) if match else None
+
+
+def _notify(
+    on_advisor: AdvisorObserver | None,
+    message: LLMMessage,
+    group: str,
+) -> None:
+    if on_advisor is not None:
+        try:
+            on_advisor(message, group)
+        except Exception:  # noqa: BLE001
+            pass
